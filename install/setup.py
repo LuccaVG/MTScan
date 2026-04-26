@@ -85,6 +85,98 @@ SUPPORTED_DISTROS = {
     }
 }
 
+HTTPX_BINARY_NAMES = ["httpx-toolkit", "httpx"]
+
+
+def binary_names_for_tool(tool: str) -> List[str]:
+    return HTTPX_BINARY_NAMES if tool == "httpx" else [tool]
+
+
+def tool_responds(path: str, tool: str) -> bool:
+    """Return True when a scanner binary responds to a normal version/help probe."""
+    for flag in ("-version", "--version"):
+        try:
+            result = subprocess.run(
+                [path, flag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True
+        except Exception:
+            continue
+
+    for flag in ("-h", "--help"):
+        try:
+            result = subprocess.run(
+                [path, flag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            output = f"{result.stdout}\n{result.stderr}".lower()
+            if result.returncode == 0:
+                if tool != "httpx":
+                    return True
+                if any(marker in output for marker in ("projectdiscovery", "fast and multi-purpose", "-tech-detect", "-status-code")):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def find_scanner_binary(tool: str) -> Optional[str]:
+    """Find the usable scanner binary, handling Kali's httpx-toolkit name."""
+    candidates: List[str] = []
+    for name in binary_names_for_tool(tool):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+
+    candidate_dirs = [
+        "/usr/local/bin",
+        "/root/go/bin",
+        os.path.expanduser("~/go/bin"),
+        "/usr/bin",
+        "/snap/bin",
+    ]
+    for directory in candidate_dirs:
+        for name in binary_names_for_tool(tool):
+            candidates.append(os.path.join(directory, name))
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and tool_responds(candidate, tool):
+            return candidate
+    return None
+
+
+def expose_tool_to_path(tool: str, source_path: str) -> bool:
+    """Make a root-installed Go tool available to regular shells via /usr/local/bin."""
+    try:
+        target_name = "httpx-toolkit" if tool == "httpx" else tool
+        target_path = os.path.join("/usr/local/bin", target_name)
+        if os.path.abspath(source_path) == os.path.abspath(target_path):
+            return True
+        if os.path.lexists(target_path):
+            os.remove(target_path)
+        os.symlink(source_path, target_path)
+        return True
+    except OSError:
+        try:
+            shutil.copy2(source_path, target_path)
+            os.chmod(target_path, 0o755)
+            return True
+        except OSError as exc:
+            print(f"{Colors.YELLOW}  Could not expose {tool} at /usr/local/bin: {exc}{Colors.END}")
+            return False
+
 def print_header():
     """Print installation header."""
     print(f"{Colors.CYAN}{'='*80}{Colors.END}")
@@ -980,21 +1072,13 @@ def clean_go_mod_cache():
 
 def install_nuclei_with_retries(repo, max_retries=3):
     """Try to install nuclei with retries, cleaning cache and switching proxy if needed."""
-    # Use a specific nuclei version tag instead of latest to reduce dependency bloat
-    # Extract the repo name without version tag
-    base_repo = repo.split('@')[0]
-    specific_version = "v3.1.5"  # Latest stable release
-    specific_repo = f"{base_repo}@{specific_version}"
-    
-    print(f"{Colors.WHITE}Installing nuclei {specific_version} (with reduced dependencies)...{Colors.END}")
+    print(f"{Colors.WHITE}Installing/updating nuclei from {repo}...{Colors.END}")
     
     for attempt in range(1, max_retries+1):
         print(f"{Colors.WHITE}Installing nuclei (attempt {attempt}/{max_retries})...{Colors.END}")
         env = os.environ.copy()
         env['CGO_ENABLED'] = '1'
         env['GO111MODULE'] = 'on'
-        # Fix the GOFLAGS format - there was a syntax error with the quotes
-        env['GOFLAGS'] = '-ldflags=-s -w'  # Correct format without nested quotes
         
         # On 2nd+ attempt, switch to direct proxy
         if attempt >= 2:
@@ -1008,11 +1092,18 @@ def install_nuclei_with_retries(repo, max_retries=3):
         timeout_seconds = 600  # 10 min
         
         # Use -trimpath to remove local paths from binary
-        result = subprocess.run(['go', 'install', '-v', '-trimpath', specific_repo], 
+        result = subprocess.run(['go', 'install', '-v', '-trimpath', repo],
                                capture_output=True, text=True, env=env, timeout=timeout_seconds)
         
         if result.returncode == 0:
-            print(f"{Colors.GREEN}   nuclei v{specific_version} installed successfully (reduced dependencies){Colors.END}")
+            print(f"{Colors.GREEN}   nuclei installed/updated successfully{Colors.END}")
+            try:
+                gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True).stdout.strip()
+                nuclei_path = os.path.join(gopath, 'bin', 'nuclei')
+                if os.path.exists(nuclei_path):
+                    expose_tool_to_path('nuclei', nuclei_path)
+            except Exception:
+                pass
             return True
         else:
             print(f"{Colors.RED}   nuclei install failed (exit {result.returncode}){Colors.END}")
@@ -1044,8 +1135,8 @@ def install_security_tools_complete(distro: str) -> bool:
             return False
         
         tools = {
-            'naabu': 'github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.1.8',
-            'httpx': 'github.com/projectdiscovery/httpx/cmd/httpx@v1.3.7', 
+            'naabu': 'github.com/projectdiscovery/naabu/v2/cmd/naabu@latest',
+            'httpx': 'github.com/projectdiscovery/httpx/cmd/httpx@latest',
             'nuclei': 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'
         }
         
@@ -1060,24 +1151,25 @@ def install_security_tools_complete(distro: str) -> bool:
                     continue
             else:
                 try:
-                    print(f"{Colors.WHITE}Installing {tool}...{Colors.END}")
-                    if shutil.which(tool):
-                        print(f"{Colors.GREEN}   {tool} already installed{Colors.END}")
-                        success_count += 1
-                        continue
+                    print(f"{Colors.WHITE}Installing/updating {tool}...{Colors.END}")
+                    existing_tool = find_scanner_binary(tool)
+                    if existing_tool:
+                        print(f"{Colors.YELLOW}   Existing {tool} found at {existing_tool}; updating to latest{Colors.END}")
+                        if existing_tool.startswith("/root/go/bin/"):
+                            expose_tool_to_path(tool, existing_tool)
                     env = os.environ.copy()
                     env['CGO_ENABLED'] = '1'
                     env['GO111MODULE'] = 'on'
                     env['GOPROXY'] = 'https://proxy.golang.org,direct'
-                    env['GOFLAGS'] = '-ldflags="-s -w"'  # Add this line to reduce binary size
                     timeout_seconds = 600 if tool == 'naabu' else 450
-                    if run_with_timeout(['go', 'install', '-v', '-trimpath', repo], timeout_seconds, f"Installing {tool} (timeout: {timeout_seconds//60}min)", allow_warnings=False):
+                    if run_with_timeout(['go', 'install', '-v', '-trimpath', repo], timeout_seconds, f"Installing/updating {tool} (timeout: {timeout_seconds//60}min)", allow_warnings=False):
                         gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True).stdout.strip()
                         gobin = os.path.join(gopath, 'bin')
                         tool_path = os.path.join(gobin, tool)
                         print(f"{Colors.WHITE}  Verifying {tool} installation at {tool_path}...{Colors.END}")
                         if os.path.exists(tool_path) and os.access(tool_path, os.X_OK):
                             print(f"{Colors.GREEN}   {tool} installed and verified at {tool_path}{Colors.END}")
+                            expose_tool_to_path(tool, tool_path)
                             success_count += 1
                         else:
                             print(f"{Colors.RED}   {tool} installation reported success but binary not found at {tool_path}{Colors.END}")
@@ -1086,7 +1178,8 @@ def install_security_tools_complete(distro: str) -> bool:
                 except Exception as e:
                     print(f"{Colors.RED}   Failed to install {tool}: {e}{Colors.END}")
           # Update nuclei templates if nuclei was installed (with optimization)
-        if shutil.which('nuclei'):
+        nuclei_binary = find_scanner_binary('nuclei')
+        if nuclei_binary:
             print(f"{Colors.WHITE}Updating nuclei templates (optimized)...{Colors.END}")
             try:
                 # Use non-interactive mode and extended timeout for template updates
@@ -1095,7 +1188,7 @@ def install_security_tools_complete(distro: str) -> bool:
                 env['NUCLEI_DISABLE_COLORS'] = 'true'  # Prevent color codes from hanging terminal
                 
                 # Run with extended timeout and silent mode for faster processing
-                result = subprocess.run(['nuclei', '-update-templates', '-silent'], 
+                result = subprocess.run([nuclei_binary, '-update-templates', '-silent'], 
                                       check=True, 
                                       stdout=subprocess.DEVNULL, 
                                       stderr=subprocess.PIPE,
@@ -1115,7 +1208,7 @@ def install_security_tools_complete(distro: str) -> bool:
           # Evaluate installation success - nuclei is critical for vulnerability analysis
         if success_count >= 2:  # At least 2 out of 3 tools must be installed
             # Check if nuclei specifically was installed (critical for vulnerability scanning)
-            if shutil.which('nuclei'):
+            if find_scanner_binary('nuclei'):
                 print(f"{Colors.GREEN} Security tools installation completed ({success_count}/3 tools) - nuclei available{Colors.END}")
                 return True
             else:
@@ -1315,28 +1408,8 @@ def final_verification() -> bool:
         
         print(f"{Colors.WHITE}Checking tool availability...{Colors.END}")
         for tool in tools_to_check:
-            # Enhanced tool detection - check multiple locations
-            tool_found = False
-            tool_path = None
-            
-            # Check standard PATH first
-            tool_path = shutil.which(tool)
-            if tool_path:
-                tool_found = True
-            else:
-                # Check common Go installation locations
-                go_locations = [
-                    os.path.expanduser(f"~/go/bin/{tool}"),
-                    f"/usr/local/go/bin/{tool}",
-                    f"/root/go/bin/{tool}",
-                    f"/home/*/go/bin/{tool}"
-                ]
-                
-                for location in go_locations:
-                    if os.path.exists(location):
-                        tool_path = location
-                        tool_found = True
-                        break
+            tool_path = shutil.which(tool) if tool == "go" else find_scanner_binary(tool)
+            tool_found = tool_path is not None
             
             if tool_found:
                 print(f"{Colors.GREEN}   {tool}: Available at {tool_path}{Colors.END}")
@@ -1347,27 +1420,8 @@ def final_verification() -> bool:
         # Test basic functionality with enhanced path detection
         print(f"{Colors.WHITE}Testing tool functionality...{Colors.END}")
         
-        # Function to find tool path
-        def find_tool_path(tool_name):
-            # Check standard PATH first
-            path = shutil.which(tool_name)
-            if path:
-                return path
-            
-            # Check common Go installation locations
-            go_locations = [
-                os.path.expanduser(f"~/go/bin/{tool_name}"),
-                f"/usr/local/go/bin/{tool_name}",
-                f"/root/go/bin/{tool_name}"
-            ]
-            
-            for location in go_locations:
-                if os.path.exists(location):
-                    return location
-            return None
-        
         # Test nuclei
-        nuclei_path = find_tool_path('nuclei')
+        nuclei_path = find_scanner_binary('nuclei')
         if nuclei_path:
             try:
                 result = subprocess.run([nuclei_path, '-version'], 
@@ -1380,7 +1434,7 @@ def final_verification() -> bool:
             print(f"{Colors.YELLOW}    nuclei: Not found for testing{Colors.END}")
         
         # Test naabu
-        naabu_path = find_tool_path('naabu')
+        naabu_path = find_scanner_binary('naabu')
         if naabu_path:
             try:
                 result = subprocess.run([naabu_path, '-version'], 
@@ -1393,12 +1447,24 @@ def final_verification() -> bool:
             print(f"{Colors.YELLOW}    naabu: Not found for testing{Colors.END}")
         
         # Test httpx
-        httpx_path = find_tool_path('httpx')
+        httpx_path = find_scanner_binary('httpx')
         if httpx_path:
             try:
-                result = subprocess.run([httpx_path, '-version'], 
-                                      capture_output=True, text=True, 
-                                      timeout=10, check=True)
+                result = subprocess.run(
+                    [httpx_path, '-version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    result = subprocess.run(
+                        [httpx_path, '-h'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=True,
+                    )
                 print(f"{Colors.GREEN}   httpx: Working{Colors.END}")
             except:
                 print(f"{Colors.YELLOW}    httpx: Version check failed{Colors.END}")
@@ -1408,13 +1474,13 @@ def final_verification() -> bool:
         # Enhanced success criteria - if tools are found even if not in PATH, consider it success
         tools_found = 0
         for tool in ['naabu', 'httpx', 'nuclei']:
-            if find_tool_path(tool):
+            if find_scanner_binary(tool):
                 tools_found += 1
         
         if tools_found >= 2:  # At least 2 out of 3 tools found
             print(f"{Colors.GREEN} Verification passed: {tools_found}/3 tools found{Colors.END}")
             if tools_found < 3:
-                print(f"{Colors.YELLOW} Add Go tools to PATH: export PATH=$PATH:~/go/bin{Colors.END}")
+                print(f"{Colors.YELLOW} Re-run setup or check /usr/local/bin permissions.{Colors.END}")
             return True
         else:
             print(f"{Colors.RED} Insufficient tools found: {tools_found}/3{Colors.END}")
@@ -1430,20 +1496,18 @@ def print_success_message():
     print(f"{Colors.BOLD}{Colors.GREEN}INSTALLATION COMPLETED SUCCESSFULLY!{Colors.END}")
     print(f"{Colors.GREEN}{'='*80}{Colors.END}")
     print(f"{Colors.WHITE} Your Linux Vulnerability Analysis Toolkit is ready!{Colors.END}")
-    print(f"\n{Colors.CYAN}CRITICAL - Add Go tools to PATH (Required):{Colors.END}")
-    print(f"{Colors.WHITE}  export PATH=$PATH:~/go/bin{Colors.END}")
-    print(f"{Colors.WHITE}  # For permanent access, add to ~/.bashrc:{Colors.END}")
-    print(f"{Colors.WHITE}  echo 'export PATH=$PATH:~/go/bin' >> ~/.bashrc{Colors.END}")
-    print(f"{Colors.YELLOW}   Without this, naabu and nuclei won't be found!{Colors.END}")
+    print(f"\n{Colors.CYAN}Tool PATH:{Colors.END}")
+    print(f"{Colors.WHITE}  Scanner binaries are exposed through /usr/local/bin when setup runs with sudo.{Colors.END}")
+    print(f"{Colors.WHITE}  If your shell cannot find them, run: export PATH=$PATH:/usr/local/bin{Colors.END}")
     print(f"\n{Colors.CYAN}Next Steps:{Colors.END}")
-    print(f"{Colors.WHITE}1. Run: export PATH=$PATH:~/go/bin{Colors.END}")
-    print(f"{Colors.WHITE}2. Navigate to the project directory{Colors.END}")
-    print(f"{Colors.WHITE}3. Test: python mtscan.py{Colors.END}")
-    print(f"{Colors.WHITE}4. Run scans: python src/workflow.py <target>{Colors.END}")
+    print(f"{Colors.WHITE}1. Navigate to the project directory{Colors.END}")
+    print(f"{Colors.WHITE}2. Test: python3 src/workflow.py --check-tools{Colors.END}")
+    print(f"{Colors.WHITE}3. Open the menu: python3 mtscan.py{Colors.END}")
+    print(f"{Colors.WHITE}4. Run scans: python3 src/workflow.py --all -host <target>{Colors.END}")
     print(f"{Colors.WHITE}5. Check config/optimized_config.json for settings{Colors.END}")
     print(f"\n{Colors.CYAN}Example Usage:{Colors.END}")
-    print(f"{Colors.WHITE}  python src/workflow.py example.com{Colors.END}")
-    print(f"{Colors.WHITE}  python src/workflow.py 192.168.1.0/24{Colors.END}")
+    print(f"{Colors.WHITE}  python3 src/workflow.py --all -host example.com --top-ports 100 --save-output{Colors.END}")
+    print(f"{Colors.WHITE}  python3 src/workflow.py -httpx -host example.com --title --status-code{Colors.END}")
     print(f"\n{Colors.GREEN}{'='*80}{Colors.END}")
 
 def check_disk_space(min_gb: float = 2.0) -> bool:
@@ -1535,7 +1599,7 @@ def main():
             if response in ['', 'y', 'yes']:
                 print("\n Launching MTScan...")
                 print("=" * 40)
-                print(f"{Colors.YELLOW}Note: If tools show as 'Not installed', run: export PATH=$PATH:~/go/bin{Colors.END}")
+                print(f"{Colors.YELLOW}Note: If tools show as 'Not installed', run: export PATH=$PATH:/usr/local/bin{Colors.END}")
                 # Change to the parent directory and launch mtscan from root
                 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 mtscan_path = os.path.join(parent_dir, "mtscan.py")
@@ -1544,11 +1608,11 @@ def main():
                 else:
                     print(" Could not find mtscan.py. Please run it manually.")
             else:
-                print("\n Setup complete! Run 'python mtscan.py' when ready.")
-                print(f"{Colors.YELLOW}Remember: export PATH=$PATH:~/go/bin{Colors.END}")
+                print("\n Setup complete! Run 'python3 mtscan.py' when ready.")
+                print(f"{Colors.YELLOW}If needed: export PATH=$PATH:/usr/local/bin{Colors.END}")
         except KeyboardInterrupt:
-            print("\n\n Setup complete! Run 'python mtscan.py' when ready.")
-            print(f"{Colors.YELLOW}Remember: export PATH=$PATH:~/go/bin{Colors.END}")
+            print("\n\n Setup complete! Run 'python3 mtscan.py' when ready.")
+            print(f"{Colors.YELLOW}If needed: export PATH=$PATH:/usr/local/bin{Colors.END}")
         
         return True
         

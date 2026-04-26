@@ -30,10 +30,11 @@ Run the Linux installer from the project root:
 sudo python3 install/setup.py
 ```
 
-If Go installed the tools into `~/go/bin`, make sure your shell can find them:
+The installer exposes Go-installed tools through `/usr/local/bin` when run with
+`sudo`. If your shell cannot find them, make sure `/usr/local/bin` is in `PATH`:
 
 ```bash
-export PATH="$PATH:$HOME/go/bin"
+export PATH="$PATH:/usr/local/bin"
 ```
 
 ## Usage
@@ -63,6 +64,9 @@ Run the full chain:
 ```bash
 python3 src/workflow.py --all -host example.com --top-ports 100 --save-output
 ```
+
+In the interactive menu, option `[4]` now offers default, fast, stealth, deep,
+and custom per-tool chain configuration before launching the scan.
 
 The full chain runs:
 
@@ -103,6 +107,10 @@ If nuclei templates are stale:
 ```bash
 python3 src/workflow.py -nuclei -host https://example.com --update-templates
 ```
+
+If scanner binaries are outdated, use menu option `[8]` and choose
+`Update scanner binaries to latest`. The full installer also installs ProjectDiscovery
+tools from `@latest`.
 
 Quick Linux smoke test without launching scanners:
 

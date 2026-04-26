@@ -37,6 +37,15 @@ except ImportError:
             pass
         return None
 
+try:
+    from src.tool_runner import is_informational_finding_line, is_security_finding_line
+except ImportError:
+    def is_security_finding_line(line):
+        return False
+
+    def is_informational_finding_line(line):
+        return False
+
 # Ensure we're running on Linux
 if platform.system().lower() != "linux":
     print("┌─────────────────────────────────────────────────────────────────┐")
@@ -176,8 +185,8 @@ def print_tools_status():
     else:
         missing_tools = [tool for tool, info in status.items() if not info['installed']]
         print(f"\n[WARNING] Missing tools: {', '.join(missing_tools)}")
-        print(f"[ACTION]  Run option [7] to install missing tools")
-        print(f"[PATH]    Add Go tools to PATH: export PATH=$PATH:~/go/bin")
+        print(f"[ACTION]  Run option [8] to install or update tools")
+        print(f"[PATH]    Ensure /usr/local/bin is in PATH: export PATH=$PATH:/usr/local/bin")
     
     print()
 
@@ -305,6 +314,87 @@ def get_ports_input():
             print("Invalid option. Please select 1-4.")
 
 
+def get_yes_no(prompt, default=False):
+    """Prompt for a yes/no answer."""
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{prompt} {suffix}: ").strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def get_complete_chain_flags():
+    """Choose preset or custom settings for the full naabu -> httpx -> nuclei chain."""
+    print("\n" + "="*60)
+    print("COMPLETE SCAN CHAIN CONFIGURATION")
+    print("="*60)
+    print("Choose how the chain should run:")
+    print("  [1] Default chain")
+    print("      naabu top 1000 ports, httpx web fingerprinting, nuclei defaults")
+    print("  [2] Fast chain")
+    print("      top 100 ports, lower noise, critical/high nuclei checks")
+    print("  [3] Stealth chain")
+    print("      lower rate, connect scan, no Interactsh callbacks")
+    print("  [4] Deep chain")
+    print("      all ports, richer httpx details, critical/high/medium/low nuclei")
+    print("  [5] Custom per-tool configuration")
+    print("      choose naabu, httpx, and nuclei flags separately")
+
+    while True:
+        choice = input("\nSelect chain mode [1-5]: ").strip() or "1"
+
+        if choice == "1":
+            return {}
+        if choice == "2":
+            return {
+                "ports": "top-100",
+                "scan_type": "connect",
+                "title": True,
+                "status_code": True,
+                "tech_detect": True,
+                "web_server": True,
+                "severity": "critical,high",
+            }
+        if choice == "3":
+            return {
+                "stealth": True,
+                "ports": "top-1000",
+                "scan_type": "connect",
+                "rate": 10,
+                "threads": 25,
+                "nuclei_rate_limit": 5,
+                "concurrency": 5,
+                "parallel_processing": 5,
+                "no_interactsh": True,
+            }
+        if choice == "4":
+            return {
+                "ports": "1-65535",
+                "scan_type": "connect",
+                "title": True,
+                "status_code": True,
+                "tech_detect": True,
+                "web_server": True,
+                "content_length": True,
+                "response_time": True,
+                "severity": "critical,high,medium,low",
+            }
+        if choice == "5":
+            selected_flags = {}
+            if get_yes_no("Configure naabu port discovery?", True):
+                show_scan_type_help("naabu")
+                selected_flags.update(get_naabu_flags())
+            if get_yes_no("Configure httpx service analysis?", True):
+                show_scan_type_help("httpx")
+                selected_flags.update(get_httpx_flags())
+            if get_yes_no("Configure nuclei vulnerability checks?", True):
+                show_scan_type_help("nuclei")
+                selected_flags.update(get_nuclei_flags())
+            return selected_flags
+
+        print("Invalid option. Please select 1-5.")
+
+
 
 def run_scan(scan_type, target, **kwargs):
     """Run a scan with enhanced real-time output and comprehensive flag support."""
@@ -324,7 +414,7 @@ def run_scan(scan_type, target, **kwargs):
     elif scan_type == "all":
         print(f"\nConfiguring COMPLETE scan chain for target: {target}")
         print("This will run naabu, then pass discovered services to httpx, then pass HTTP targets to nuclei.")
-        flags = {}
+        flags = get_complete_chain_flags()
     else:
         print(f"ERROR: Unknown scan type: {scan_type}")
         return False
@@ -581,6 +671,7 @@ def run_scan(scan_type, target, **kwargs):
         
         # Variables to track scan progress
         output_lines = []
+        finding_lines = []
         last_activity = time.time()
         findings_count = 0
         
@@ -596,16 +687,23 @@ def run_scan(scan_type, target, **kwargs):
                 if line:
                     current_time = datetime.datetime.now().strftime('%H:%M:%S')
                     
-                    # Color-code and categorize output
-                    if any(keyword in line.lower() for keyword in ['error', 'failed', 'timeout']):
-                        print(f"[{current_time}] [ERROR] {line}")
-                    elif any(keyword in line.lower() for keyword in ['warning', 'warn']):
-                        print(f"[{current_time}] [WARN]  {line}")
-                    elif any(keyword in line.lower() for keyword in ['open', 'found', 'vulnerable', 'critical', 'high']):
+                    lower_line = line.lower()
+
+                    # Color-code and categorize output. Only actual nuclei
+                    # result lines count as security findings; scanner status
+                    # messages such as "No results found" stay informational.
+                    if is_security_finding_line(line):
                         findings_count += 1
+                        finding_lines.append(line)
                         print(f"[{current_time}] [FIND]  {line}")
-                        print(f"[COUNTER] Total findings: {findings_count}")
-                    elif any(keyword in line.lower() for keyword in ['scanning', 'testing', 'checking']):
+                        print(f"[COUNTER] Total security findings: {findings_count}")
+                    elif is_informational_finding_line(line):
+                        print(f"[{current_time}] [NOTE]  {line}")
+                    elif any(keyword in lower_line for keyword in ['warning', 'warn', '[wrn]']):
+                        print(f"[{current_time}] [WARN]  {line}")
+                    elif any(keyword in lower_line for keyword in ['error', 'failed', 'timeout']):
+                        print(f"[{current_time}] [ERROR] {line}")
+                    elif any(keyword in lower_line for keyword in ['scanning', 'testing', 'checking']):
                         print(f"[{current_time}] [SCAN]  {line}")
                     else:
                         print(f"[{current_time}] [INFO]  {line}")
@@ -622,7 +720,7 @@ def run_scan(scan_type, target, **kwargs):
         print(f"[SCAN COMPLETED] {datetime.datetime.now().strftime('%H:%M:%S')}")
         print(f"[DURATION] {elapsed_total:.2f} seconds ({elapsed_total/60:.1f} minutes)")
         print(f"[OUTPUT LINES] {len(output_lines)} total")
-        print(f"[FINDINGS] {findings_count} items detected")
+        print(f"[SECURITY FINDINGS] {findings_count} risks detected")
         print(f"[EXIT CODE] {return_code}")
         
         if return_code == 0:
@@ -635,12 +733,9 @@ def run_scan(scan_type, target, **kwargs):
         # Detailed findings summary
         if findings_count > 0:
             print("\n" + "=" * 80)
-            print("FINDINGS SUMMARY")
+            print("SECURITY FINDINGS SUMMARY")
             print("=" * 80)
-            
-            finding_lines = [line for line in output_lines if any(keyword in line.lower() 
-                           for keyword in ['open', 'found', 'vulnerable', 'critical', 'high'])]
-            
+
             for i, finding in enumerate(finding_lines[:10], 1):
                 print(f"{i:2d}. {finding}")
             
@@ -649,7 +744,7 @@ def run_scan(scan_type, target, **kwargs):
             
             print(f"\nTotal findings displayed: {min(len(finding_lines), 10)} of {len(finding_lines)}")
         else:
-            print("\n[INFO] No significant findings detected in this scan")
+            print("\n[INFO] No security risks detected in this scan")
         
         # File output information
         if save_output:
@@ -836,7 +931,7 @@ def update_templates():
         print("You can try updating manually later: nuclei -update-templates")
     except FileNotFoundError:
         print("nuclei command not found. Please ensure it's installed and in PATH.")
-        print("Try: export PATH=$PATH:~/go/bin")
+        print("Try: export PATH=$PATH:/usr/local/bin")
     except Exception as e:
         print(f"Template update failed: {e}")
     
@@ -871,7 +966,7 @@ def show_help():
     print()
     print("GETTING STARTED:")
     print("  • Run: python mtscan.py")
-    print("  • Or: python src/workflow.py <target>")
+    print("  • Or: python src/workflow.py --all -host <target>")
     print()
     print("EXAMPLES:")
     print("  Target formats:")
@@ -882,12 +977,144 @@ def show_help():
     
     input("Press Enter to continue...")
 
+
+PROJECTDISCOVERY_GO_MODULES = {
+    "naabu": "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+    "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "nuclei": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+}
+
+
+def expose_updated_tool(tool, source_path):
+    """Expose a Go-installed scanner through /usr/local/bin when possible."""
+    target_name = "httpx-toolkit" if tool == "httpx" else tool
+    target_path = f"/usr/local/bin/{target_name}"
+
+    try:
+        if os.path.lexists(target_path):
+            os.remove(target_path)
+        os.symlink(source_path, target_path)
+        print(f"[OK] {tool} exposed at {target_path}")
+        return True
+    except PermissionError:
+        print(f"[INFO] Need sudo to update {target_path}")
+    except OSError as exc:
+        print(f"[WARN] Could not update {target_path}: {exc}")
+
+    try:
+        result = subprocess.run(
+            ["sudo", "ln", "-sfn", source_path, target_path],
+            check=False,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            print(f"[OK] {tool} exposed at {target_path}")
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError) as exc:
+        print(f"[WARN] sudo link failed for {tool}: {exc}")
+
+    print(f"[ACTION] Add Go bin to PATH if needed: export PATH=$PATH:$(go env GOPATH)/bin")
+    return False
+
+
+def update_projectdiscovery_tool(tool, module):
+    """Install or update one ProjectDiscovery scanner to the latest Go release."""
+    if shutil.which("go") is None:
+        print("[ERROR] Go is required to update scanner tools.")
+        return False
+
+    print(f"\n[UPDATE] {tool}: {module}")
+    env = os.environ.copy()
+    env["CGO_ENABLED"] = "1"
+    env["GO111MODULE"] = "on"
+    env["GOPROXY"] = "https://proxy.golang.org,direct"
+
+    try:
+        result = subprocess.run(
+            ["go", "install", "-v", "-trimpath", module],
+            env=env,
+            timeout=900,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[ERROR] {tool} update timed out after 15 minutes.")
+        return False
+
+    if result.returncode != 0:
+        print(f"[ERROR] {tool} update failed with exit code {result.returncode}.")
+        return False
+
+    try:
+        gopath = subprocess.run(
+            ["go", "env", "GOPATH"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+    except Exception as exc:
+        print(f"[WARN] Could not locate GOPATH after updating {tool}: {exc}")
+        return True
+
+    binary_path = os.path.join(gopath, "bin", tool)
+    if os.path.exists(binary_path):
+        expose_updated_tool(tool, binary_path)
+        print(f"[OK] {tool} updated at {binary_path}")
+        return True
+
+    print(f"[WARN] {tool} update completed, but binary was not found at {binary_path}")
+    return False
+
+
+def update_scanner_tools():
+    """Update scanner binaries and nuclei templates without rerunning full setup."""
+    print("\nUPDATING PROJECTDISCOVERY TOOLS TO LATEST:")
+    print("=" * 50)
+
+    success_count = 0
+    for tool, module in PROJECTDISCOVERY_GO_MODULES.items():
+        if update_projectdiscovery_tool(tool, module):
+            success_count += 1
+
+    nuclei_path = find_tool_path("nuclei") or "nuclei"
+    print("\n[UPDATE] nuclei templates")
+    try:
+        result = subprocess.run([nuclei_path, "-update-templates"], timeout=300, check=False)
+        if result.returncode == 0:
+            print("[OK] Nuclei templates updated.")
+        else:
+            print("[WARN] Nuclei template update completed with warnings.")
+    except subprocess.TimeoutExpired:
+        print("[WARN] Nuclei template update timed out after 5 minutes.")
+    except FileNotFoundError:
+        print("[WARN] nuclei not found for template update.")
+
+    print(f"\n[SUMMARY] Updated {success_count}/3 scanner binaries.")
+    return success_count == 3
+
+
 def install_tools():
     """Run the installation script."""
     clear_screen()
     print_banner()
     print("INSTALLING/UPDATING TOOLS:")
     print("=" * 50)
+    print("  [1] Update scanner binaries to latest")
+    print("      Runs go install @latest for naabu, httpx, and nuclei")
+    print("  [2] Run full setup installer")
+    print("      Installs system packages, Go, scanner tools, and config")
+    print()
+
+    install_choice = input("Select option [1-2]: ").strip() or "1"
+
+    if install_choice == "1":
+        update_scanner_tools()
+        input("\nPress Enter to continue...")
+        return
+    if install_choice != "2":
+        print("Invalid option.")
+        input("\nPress Enter to continue...")
+        return
     
     if not os.path.exists("install/setup.py"):
         print("Installation script not found at install/setup.py")

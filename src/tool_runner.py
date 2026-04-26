@@ -28,6 +28,11 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, ca
 
 
 SECURITY_TOOLS = ("naabu", "httpx", "nuclei")
+NUCLEI_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info", "unknown"}
+SECURITY_FINDING_SEVERITIES = {"critical", "high", "medium", "low"}
+NUCLEI_TEXT_FINDING_PATTERN = re.compile(
+    r"^\[(?P<template>[^\]]+)\]\s+\[[^\]]+\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<matched>\S+)"
+)
 
 
 @dataclass
@@ -75,9 +80,7 @@ def output_path_for(tool: str, output_dir: Path, json_output: bool = False, csv_
 
 
 def _candidate_paths(tool_name: str) -> List[Path]:
-    names = [tool_name]
-    if tool_name == "httpx":
-        names.append("httpx-toolkit")
+    names = ["httpx-toolkit", "httpx"] if tool_name == "httpx" else [tool_name]
 
     paths: List[Path] = []
     for name in names:
@@ -87,11 +90,11 @@ def _candidate_paths(tool_name: str) -> List[Path]:
 
     home = Path.home()
     common_dirs = [
-        Path("/usr/bin"),
         Path("/usr/local/bin"),
-        Path("/snap/bin"),
-        Path("/root/go/bin"),
         home / "go" / "bin",
+        Path("/root/go/bin"),
+        Path("/usr/bin"),
+        Path("/snap/bin"),
         home / ".local" / "bin",
         Path("/opt") / tool_name,
     ]
@@ -110,11 +113,46 @@ def _candidate_paths(tool_name: str) -> List[Path]:
     return unique
 
 
+def _candidate_responds(path: Path, tool_name: str) -> bool:
+    for flag in ("-version", "--version"):
+        try:
+            result = subprocess.run(
+                [str(path), flag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True
+        except Exception:
+            continue
+
+    for flag in ("-h", "--help"):
+        try:
+            result = subprocess.run(
+                [str(path), flag],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            output = f"{result.stdout}\n{result.stderr}".lower()
+            if result.returncode == 0:
+                if tool_name != "httpx":
+                    return True
+                if any(marker in output for marker in ("projectdiscovery", "fast and multi-purpose", "-tech-detect", "-status-code")):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def get_executable_path(tool_name: str) -> Optional[str]:
     """Find a ProjectDiscovery executable across common Linux install paths."""
     for path in _candidate_paths(tool_name):
         try:
-            if path.is_file() and os.access(path, os.X_OK):
+            if path.is_file() and os.access(path, os.X_OK) and _candidate_responds(path, tool_name):
                 return str(path)
         except OSError:
             continue
@@ -589,6 +627,34 @@ def _first_token_lines(lines: Iterable[str], prefixes: Tuple[str, ...]) -> List[
     return values
 
 
+def _is_valid_port(port: object) -> bool:
+    try:
+        number = int(str(port))
+    except (TypeError, ValueError):
+        return False
+    return 1 <= number <= 65535
+
+
+def _normalize_naabu_target(token: str) -> Optional[str]:
+    candidate = token.strip().strip(",")
+    if not candidate:
+        return None
+
+    if candidate.startswith("["):
+        match = re.match(r"^\[(?P<host>[^\]]+)\]:(?P<port>\d+)$", candidate)
+        if match and _is_valid_port(match.group("port")):
+            return f"[{match.group('host')}]:{int(match.group('port'))}"
+        return None
+
+    if ":" not in candidate:
+        return None
+
+    host, port = candidate.rsplit(":", 1)
+    if not host or not _is_valid_port(port):
+        return None
+    return f"{host}:{int(port)}"
+
+
 def _extract_naabu_targets(lines: Iterable[str]) -> List[str]:
     targets: List[str] = []
     for line in lines:
@@ -600,12 +666,14 @@ def _extract_naabu_targets(lines: Iterable[str]) -> List[str]:
                 data = json.loads(text)
                 host = data.get("host") or data.get("ip")
                 port = data.get("port")
-                if host and port:
-                    targets.append(f"{host}:{port}")
+                if host and _is_valid_port(port):
+                    targets.append(f"{host}:{int(str(port))}")
                     continue
             except json.JSONDecodeError:
                 pass
-        targets.append(text.split()[0])
+        target = _normalize_naabu_target(text.split()[0])
+        if target:
+            targets.append(target)
     return targets
 
 
@@ -675,6 +743,51 @@ def _normalize_finding(data: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def nuclei_finding_severity(line: str) -> Optional[str]:
+    """Return nuclei result severity for actual findings, excluding status logs."""
+    text = line.strip()
+    if not text:
+        return None
+
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        info = data.get("info") if isinstance(data.get("info"), dict) else {}
+        info_dict = info if isinstance(info, dict) else {}
+        severity = str(info_dict.get("severity") or data.get("severity") or "").lower()
+        has_template = bool(data.get("template-id") or data.get("template_id"))
+        has_target = bool(data.get("matched-at") or data.get("matched") or data.get("host") or data.get("url"))
+        if has_template and has_target and severity in NUCLEI_FINDING_SEVERITIES:
+            return severity
+        return None
+
+    match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
+    if not match:
+        return None
+
+    severity = match.group("severity").lower()
+    if severity in NUCLEI_FINDING_SEVERITIES:
+        return severity
+    return None
+
+
+def is_security_finding_line(line: str) -> bool:
+    """True for actionable nuclei findings, not warnings or scanner status lines."""
+    severity = nuclei_finding_severity(line)
+    return severity in SECURITY_FINDING_SEVERITIES
+
+
+def is_informational_finding_line(line: str) -> bool:
+    """True for nuclei info/unknown result lines that are observations, not risks."""
+    severity = nuclei_finding_severity(line)
+    return severity in {"info", "unknown"}
+
+
 def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
     """Parse nuclei JSONL, CSV, or default text output into normalized findings."""
     if not path or not path.exists():
@@ -702,7 +815,6 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
         except OSError:
             return []
 
-    text_pattern = re.compile(r"^\[(?P<template>[^\]]+)\]\s+\[[^\]]+\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<matched>\S+)")
     try:
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
             text = line.strip()
@@ -716,12 +828,15 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
                         continue
                 except json.JSONDecodeError:
                     pass
-            match = text_pattern.match(text)
+            match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
             if match:
+                severity = match.group("severity").lower()
+                if severity not in NUCLEI_FINDING_SEVERITIES:
+                    continue
                 findings.append(
                     {
                         "name": match.group("template"),
-                        "severity": match.group("severity").lower(),
+                        "severity": severity,
                         "template_id": match.group("template"),
                         "matched_at": match.group("matched"),
                         "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
@@ -746,7 +861,15 @@ def _severity_counts(findings: Sequence[Dict[str, object]]) -> Dict[str, int]:
 
 def write_security_findings_report(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
     nuclei_output = next((result.output_file for result in results if result.tool == "nuclei" and result.output_file), None)
-    findings = parse_nuclei_findings(nuclei_output)
+    parsed_findings = parse_nuclei_findings(nuclei_output)
+    findings = [
+        finding for finding in parsed_findings
+        if str(finding.get("severity") or "").lower() in SECURITY_FINDING_SEVERITIES
+    ]
+    observations = [
+        finding for finding in parsed_findings
+        if str(finding.get("severity") or "").lower() not in SECURITY_FINDING_SEVERITIES
+    ]
     counts = _severity_counts(findings)
     severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
     sorted_findings = sorted(findings, key=lambda item: severity_rank.get(str(item.get("severity")), 5))
@@ -760,19 +883,19 @@ def write_security_findings_report(output_dir: Path, target: str, results: Seque
         "",
         "## Summary",
         "",
-        f"- Total findings: {len(findings)}",
+        f"- Total security findings: {len(findings)}",
         f"- Critical: {counts['critical']}",
         f"- High: {counts['high']}",
         f"- Medium: {counts['medium']}",
         f"- Low: {counts['low']}",
-        f"- Informational/Unknown: {counts['info'] + counts['unknown']}",
+        f"- Informational observations: {len(observations)}",
         "",
     ]
 
     if not findings:
         lines.extend(
             [
-                "No nuclei vulnerability findings were parsed from the saved output.",
+                "No nuclei security findings were parsed from the saved output.",
                 "",
                 "If you expected findings, re-run the scan with `--json-output` so the report can include template descriptions, references, and remediation text.",
                 "",
@@ -996,9 +1119,10 @@ def run_chain(
     results.append(naabu_result)
 
     naabu_lines = [] if dry_run else (_read_nonempty_lines(naabu_file) or naabu_result.output_lines)
+    naabu_targets = _extract_naabu_targets(naabu_lines)
     httpx_input = output_dir / "httpx_targets.txt"
-    if naabu_lines:
-        _write_lines(httpx_input, _extract_naabu_targets(naabu_lines))
+    if naabu_targets:
+        _write_lines(httpx_input, naabu_targets)
         httpx_target_list = str(httpx_input)
         httpx_target = None
     else:

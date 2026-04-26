@@ -114,7 +114,7 @@ def check_required_commands(commands: List[str]) -> List[str]:
     """Check if required commands are available and return missing ones."""
     missing = []
     for cmd in commands:
-        if not shutil.which(cmd) and not os.path.exists(os.path.expanduser(f"~/go/bin/{cmd}")):
+        if not get_executable_path(cmd):
             missing.append(cmd)
     return missing
 
@@ -167,10 +167,7 @@ def check_tools_installation() -> Dict[str, Dict[str, Any]]:
     }
     
     for tool, data in tools.items():
-        # Check if tool exists in PATH or ~/go/bin
-        tool_path = shutil.which(tool)
-        if not tool_path and os.path.exists(os.path.expanduser(f"~/go/bin/{tool}")):
-            tool_path = os.path.expanduser(f"~/go/bin/{tool}")
+        tool_path = get_executable_path(tool)
         
         if tool_path:
             try:
@@ -234,12 +231,13 @@ def get_executable_path(cmd: str) -> Optional[str]:
     
     # Common Go tool installation locations
     possible_locations = [
+        f"/usr/local/bin/{cmd}",                         # Exposed scanner binary
+        "/usr/local/bin/httpx-toolkit" if cmd == "httpx" else "",
         os.path.expanduser(f"~/go/bin/{cmd}"),           # User's go/bin
         f"/root/go/bin/{cmd}",                           # Root's go/bin (common in Kali)
         f"/usr/local/go/bin/{cmd}",                      # System Go installation
         f"/usr/bin/{cmd}",                               # System package manager
         "/usr/bin/httpx-toolkit" if cmd == "httpx" else "",
-        f"/usr/local/bin/{cmd}",                         # Local installation
         f"/opt/go/bin/{cmd}",                            # Alternative Go location
         os.path.expanduser(f"~/.local/bin/{cmd}"),       # User's local bin
         f"/snap/bin/{cmd}",                              # Snap packages
