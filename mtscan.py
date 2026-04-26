@@ -15,6 +15,7 @@ import re
 import ipaddress
 import urllib.parse
 import threading
+import signal
 import time
 from pathlib import Path
 
@@ -1017,6 +1018,90 @@ def expose_updated_tool(tool, source_path):
     return False
 
 
+def stop_process_tree(process):
+    """Terminate a process and its children so timeout retries cannot hang."""
+    if process.poll() is not None:
+        return
+
+    try:
+        if platform.system().lower() == "linux":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            if platform.system().lower() == "linux":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def run_timed_command(cmd, timeout_seconds, env=None, capture_output=True, passthrough=False):
+    """Run a command with process-group timeout protection."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=None if passthrough else (subprocess.PIPE if capture_output else subprocess.DEVNULL),
+        stderr=None if passthrough else subprocess.PIPE,
+        env=env,
+        text=True,
+        start_new_session=platform.system().lower() == "linux",
+    )
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return process.returncode or 0, stdout or "", stderr or "", False
+    except subprocess.TimeoutExpired:
+        stop_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return process.returncode if process.returncode is not None else -9, stdout or "", stderr or "", True
+
+
+def prepare_go_build_env():
+    """Prepare Go build environment using disk-backed temp/cache directories."""
+    env = os.environ.copy()
+    try:
+        gopath = subprocess.run(
+            ["go", "env", "GOPATH"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+    except Exception:
+        gopath = os.path.expanduser("~/go")
+
+    build_root = os.path.join(gopath, "mtscan-build")
+    tmp_dir = os.path.join(build_root, "tmp")
+    cache_dir = os.path.join(build_root, "cache")
+    mod_cache_dir = os.path.join(build_root, "pkg", "mod")
+
+    for directory in (tmp_dir, cache_dir, mod_cache_dir):
+        os.makedirs(directory, exist_ok=True)
+
+    env["TMPDIR"] = tmp_dir
+    env["GOTMPDIR"] = tmp_dir
+    env["GOCACHE"] = cache_dir
+    env["GOMODCACHE"] = mod_cache_dir
+    env["CGO_ENABLED"] = "1"
+    env["GO111MODULE"] = "on"
+    env["GOPROXY"] = "https://proxy.golang.org,direct"
+
+    print(f"[INFO] Go build temp/cache: {build_root}")
+    return env
+
+
 def update_projectdiscovery_tool(tool, module):
     """Install or update one ProjectDiscovery scanner to the latest Go release."""
     if shutil.which("go") is None:
@@ -1024,24 +1109,24 @@ def update_projectdiscovery_tool(tool, module):
         return False
 
     print(f"\n[UPDATE] {tool}: {module}")
-    env = os.environ.copy()
-    env["CGO_ENABLED"] = "1"
-    env["GO111MODULE"] = "on"
-    env["GOPROXY"] = "https://proxy.golang.org,direct"
+    env = prepare_go_build_env()
 
-    try:
-        result = subprocess.run(
-            ["go", "install", "-v", "-trimpath", module],
-            env=env,
-            timeout=900,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+    returncode, stdout, stderr, timed_out = run_timed_command(
+        ["go", "install", "-v", "-trimpath", module],
+        900,
+        env=env,
+        capture_output=True,
+    )
+    if timed_out:
         print(f"[ERROR] {tool} update timed out after 15 minutes.")
         return False
 
-    if result.returncode != 0:
-        print(f"[ERROR] {tool} update failed with exit code {result.returncode}.")
+    if returncode != 0:
+        print(f"[ERROR] {tool} update failed with exit code {returncode}.")
+        if stdout:
+            print(stdout[-1000:])
+        if stderr:
+            print(stderr[-1000:])
         return False
 
     try:
@@ -1125,23 +1210,24 @@ def install_tools():
     
     try:
         print("Running installation script...")
-        # Try without sudo first, then with sudo if needed
-        try:
-            result = subprocess.run(["python3", "install/setup.py"], 
-                                  timeout=1800)  # 30 minute timeout
-        except subprocess.TimeoutExpired:
-            print("Installation timed out after 30 minutes.")
-            result = subprocess.CompletedProcess(args=[], returncode=1)
-        except PermissionError:
-            print("Permission denied, trying with sudo...")
-            try:
-                result = subprocess.run(["sudo", "python3", "install/setup.py"], 
-                                      timeout=1800)
-            except subprocess.TimeoutExpired:
-                print("Installation timed out after 30 minutes.")
-                result = subprocess.CompletedProcess(args=[], returncode=1)
+        returncode, _, _, timed_out = run_timed_command(
+            ["python3", "install/setup.py"],
+            1800,
+            passthrough=True,
+        )
+        if timed_out:
+            print("Installation timed out after 30 minutes. Process tree was stopped.")
+        elif returncode != 0:
+            print("Installation did not complete without sudo; trying with sudo...")
+            returncode, _, _, timed_out = run_timed_command(
+                ["sudo", "python3", "install/setup.py"],
+                1800,
+                passthrough=True,
+            )
+            if timed_out:
+                print("Installation timed out after 30 minutes. Process tree was stopped.")
         
-        if result.returncode == 0:
+        if returncode == 0 and not timed_out:
             print("Installation completed successfully!")
         else:
             print("Installation completed with some issues.")

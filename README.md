@@ -110,7 +110,10 @@ python3 src/workflow.py -nuclei -host https://example.com --update-templates
 
 If scanner binaries are outdated, use menu option `[8]` and choose
 `Update scanner binaries to latest`. The full installer also installs ProjectDiscovery
-tools from `@latest`.
+tools from `@latest`. Go builds use a disk-backed cache under
+`$GOPATH/mtscan-build` to avoid Kali `/tmp` space issues during nuclei builds.
+Installer retries are timeout-bound and stop the full child process tree before
+moving to the next attempt.
 
 Quick Linux smoke test without launching scanners:
 

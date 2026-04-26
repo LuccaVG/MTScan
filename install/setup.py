@@ -380,7 +380,64 @@ def validate_system_requirements() -> Tuple[bool, Optional[str]]:
     
     return True, distro
 
-def run_with_timeout(cmd: List[str], timeout_seconds: int = 300, description: str = "", allow_warnings: bool = True) -> bool:
+def stop_process_tree(process: subprocess.Popen) -> None:
+    """Terminate a process and its children so timeout retries cannot hang."""
+    if process.poll() is not None:
+        return
+
+    try:
+        if platform.system().lower() == "linux":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            if platform.system().lower() == "linux":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def run_timed_command(
+    cmd: List[str],
+    timeout_seconds: int,
+    env: Optional[Dict[str, str]] = None,
+    capture_stdout: bool = True,
+    cwd: Optional[str] = None,
+) -> Tuple[int, str, str, bool]:
+    """Run a command with process-group timeout protection."""
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+        start_new_session=platform.system().lower() == "linux",
+    )
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return process.returncode or 0, stdout or "", stderr or "", False
+    except subprocess.TimeoutExpired:
+        stop_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return process.returncode if process.returncode is not None else -9, stdout or "", stderr or "", True
+
+
+def run_with_timeout(cmd: List[str], timeout_seconds: int = 300, description: str = "", allow_warnings: bool = True, env_override: Optional[Dict[str, str]] = None) -> bool:
     """Run command with timeout protection and enhanced progress indication."""
     try:
         print(f"{Colors.WHITE}{description}...{Colors.END}")
@@ -390,27 +447,31 @@ def run_with_timeout(cmd: List[str], timeout_seconds: int = 300, description: st
         env['DEBIAN_FRONTEND'] = 'noninteractive'
         env['NEEDRESTART_MODE'] = 'a'  # Prevent needrestart from hanging
         env['UCF_FORCE_CONFOLD'] = '1'  # Use old config files to prevent prompts
-        
-        # Start the process with more aggressive settings to prevent hangs
-        process = subprocess.Popen(cmd, 
-                                 stdout=subprocess.PIPE if 'Installing' in description else subprocess.DEVNULL, 
-                                 stderr=subprocess.PIPE,
-                                 env=env)
-        
-        # Monitor progress with timeout
-        try:
-            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        if env_override:
+            env.update(env_override)
+
+        stdout, stderr, timed_out = "", "", False
+        returncode, stdout, stderr, timed_out = run_timed_command(
+            cmd,
+            timeout_seconds,
+            env=env,
+            capture_stdout='Installing' in description,
+        )
+
+        if timed_out:
+            print(f"{Colors.YELLOW} {description} timed out after {timeout_seconds}s; process tree was stopped{Colors.END}")
+            return False
             
-            if process.returncode == 0:
+        if returncode == 0:
                 print(f"{Colors.GREEN} {description} completed successfully{Colors.END}")
                 return True
-            else:
+        else:
                 # Enhanced error handling for Go tool installations
                 if 'go install' in ' '.join(cmd) or any('github.com' in arg for arg in cmd):
                     # For Go installations, any non-zero exit code is a failure
-                    print(f"{Colors.RED} {description} failed (exit code: {process.returncode}){Colors.END}")
+                    print(f"{Colors.RED} {description} failed (exit code: {returncode}){Colors.END}")
                     if stderr:
-                        error_msg = stderr.decode().strip()
+                        error_msg = stderr.strip()
                         if error_msg:
                             print(f"{Colors.RED}  Error details: {error_msg[:300]}{Colors.END}")
                             
@@ -426,30 +487,19 @@ def run_with_timeout(cmd: List[str], timeout_seconds: int = 300, description: st
                     return False
                 elif allow_warnings:
                     # For package operations, warnings may be acceptable
-                    print(f"{Colors.YELLOW} {description} completed with warnings (exit code: {process.returncode}){Colors.END}")
+                    print(f"{Colors.YELLOW} {description} completed with warnings (exit code: {returncode}){Colors.END}")
                     if stderr:
-                        error_msg = stderr.decode().strip()
+                        error_msg = stderr.strip()
                         if error_msg and "error" in error_msg.lower():
                             print(f"{Colors.YELLOW}  Warning: {error_msg[:200]}{Colors.END}")
                     return True  # Continue on warnings for most package operations
                 else:
-                    print(f"{Colors.RED} {description} failed (exit code: {process.returncode}){Colors.END}")
+                    print(f"{Colors.RED} {description} failed (exit code: {returncode}){Colors.END}")
                     if stderr:
-                        error_msg = stderr.decode().strip()
+                        error_msg = stderr.strip()
                         if error_msg:
                             print(f"{Colors.RED}  Error: {error_msg[:200]}{Colors.END}")
                     return False
-                
-        except subprocess.TimeoutExpired:
-            print(f"{Colors.YELLOW} {description} timed out after {timeout_seconds}s{Colors.END}")
-            # More aggressive process termination for Linux
-            try:
-                process.terminate()
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            return False
             
     except Exception as e:
         print(f"{Colors.RED} {description} failed: {e}{Colors.END}")
@@ -1061,14 +1111,44 @@ def attempt_dependency_recovery(distro: str) -> bool:
         print(f"{Colors.RED} Recovery attempt failed: {e}{Colors.END}")
         return False
 
-def clean_go_mod_cache():
+def clean_go_mod_cache(env_override: Optional[Dict[str, str]] = None):
     """Clean Go module cache to resolve download issues."""
-    try:
-        print(f"{Colors.YELLOW}Cleaning Go module cache...{Colors.END}")
-        subprocess.run(['go', 'clean', '-modcache'], check=True)
+    print(f"{Colors.YELLOW}Cleaning Go module cache...{Colors.END}")
+    if run_with_timeout(['go', 'clean', '-modcache'], 120, "Cleaning Go module cache", allow_warnings=False, env_override=env_override):
         print(f"{Colors.GREEN}   Go module cache cleaned{Colors.END}")
-    except Exception as e:
-        print(f"{Colors.YELLOW}   Could not clean Go module cache: {e}{Colors.END}")
+    else:
+        print(f"{Colors.YELLOW}   Could not clean Go module cache within timeout; continuing retry{Colors.END}")
+
+def prepare_go_build_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Prepare Go build environment using disk-backed temp/cache directories."""
+    env = os.environ.copy()
+    try:
+        gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+    except Exception:
+        gopath = os.path.expanduser("~/go")
+
+    go_build_root = os.path.join(gopath, "mtscan-build")
+    tmp_dir = os.path.join(go_build_root, "tmp")
+    cache_dir = os.path.join(go_build_root, "cache")
+    mod_cache_dir = os.path.join(go_build_root, "pkg", "mod")
+
+    for directory in (tmp_dir, cache_dir, mod_cache_dir):
+        os.makedirs(directory, exist_ok=True)
+
+    env.update({
+        "TMPDIR": tmp_dir,
+        "GOTMPDIR": tmp_dir,
+        "GOCACHE": cache_dir,
+        "GOMODCACHE": mod_cache_dir,
+        "CGO_ENABLED": "1",
+        "GO111MODULE": "on",
+        "GOPROXY": "https://proxy.golang.org,direct",
+    })
+    if extra_env:
+        env.update(extra_env)
+
+    print(f"{Colors.WHITE}  Go build temp/cache: {go_build_root}{Colors.END}")
+    return env
 
 def install_nuclei_with_retries(repo, max_retries=3):
     """Try to install nuclei with retries, cleaning cache and switching proxy if needed."""
@@ -1076,9 +1156,7 @@ def install_nuclei_with_retries(repo, max_retries=3):
     
     for attempt in range(1, max_retries+1):
         print(f"{Colors.WHITE}Installing nuclei (attempt {attempt}/{max_retries})...{Colors.END}")
-        env = os.environ.copy()
-        env['CGO_ENABLED'] = '1'
-        env['GO111MODULE'] = 'on'
+        env = prepare_go_build_env()
         
         # On 2nd+ attempt, switch to direct proxy
         if attempt >= 2:
@@ -1088,17 +1166,23 @@ def install_nuclei_with_retries(repo, max_retries=3):
             env['GOPROXY'] = 'https://proxy.golang.org,direct'
         # On 2nd+ attempt, clean cache
         if attempt >= 2:
-            clean_go_mod_cache()
+            clean_go_mod_cache(env)
         timeout_seconds = 600  # 10 min
         
         # Use -trimpath to remove local paths from binary
-        result = subprocess.run(['go', 'install', '-v', '-trimpath', repo],
-                               capture_output=True, text=True, env=env, timeout=timeout_seconds)
+        returncode, stdout, stderr, timed_out = run_timed_command(
+            ['go', 'install', '-v', '-trimpath', repo],
+            timeout_seconds,
+            env=env,
+            capture_stdout=True,
+        )
         
-        if result.returncode == 0:
+        if timed_out:
+            print(f"{Colors.RED}   nuclei install timed out after {timeout_seconds}s; process tree was stopped{Colors.END}")
+        elif returncode == 0:
             print(f"{Colors.GREEN}   nuclei installed/updated successfully{Colors.END}")
             try:
-                gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True).stdout.strip()
+                gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True, timeout=10).stdout.strip()
                 nuclei_path = os.path.join(gopath, 'bin', 'nuclei')
                 if os.path.exists(nuclei_path):
                     expose_tool_to_path('nuclei', nuclei_path)
@@ -1106,14 +1190,15 @@ def install_nuclei_with_retries(repo, max_retries=3):
                 pass
             return True
         else:
-            print(f"{Colors.RED}   nuclei install failed (exit {result.returncode}){Colors.END}")
-            print(f"{Colors.YELLOW}  --- go install output ---{Colors.END}")
-            print(result.stdout[-1000:])
-            print(result.stderr[-1000:])
-            if attempt == max_retries:
-                print(f"{Colors.RED}   nuclei installation failed after {max_retries} attempts{Colors.END}")
-                return False
-            print(f"{Colors.YELLOW}  Retrying nuclei installation...{Colors.END}")
+            print(f"{Colors.RED}   nuclei install failed (exit {returncode}){Colors.END}")
+
+        print(f"{Colors.YELLOW}  --- go install output ---{Colors.END}")
+        print(stdout[-1000:])
+        print(stderr[-1000:])
+        if attempt == max_retries:
+            print(f"{Colors.RED}   nuclei installation failed after {max_retries} attempts{Colors.END}")
+            return False
+        print(f"{Colors.YELLOW}  Retrying nuclei installation...{Colors.END}")
     return False
 
 def install_security_tools_complete(distro: str) -> bool:
@@ -1157,13 +1242,10 @@ def install_security_tools_complete(distro: str) -> bool:
                         print(f"{Colors.YELLOW}   Existing {tool} found at {existing_tool}; updating to latest{Colors.END}")
                         if existing_tool.startswith("/root/go/bin/"):
                             expose_tool_to_path(tool, existing_tool)
-                    env = os.environ.copy()
-                    env['CGO_ENABLED'] = '1'
-                    env['GO111MODULE'] = 'on'
-                    env['GOPROXY'] = 'https://proxy.golang.org,direct'
+                    env = prepare_go_build_env()
                     timeout_seconds = 600 if tool == 'naabu' else 450
-                    if run_with_timeout(['go', 'install', '-v', '-trimpath', repo], timeout_seconds, f"Installing/updating {tool} (timeout: {timeout_seconds//60}min)", allow_warnings=False):
-                        gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True).stdout.strip()
+                    if run_with_timeout(['go', 'install', '-v', '-trimpath', repo], timeout_seconds, f"Installing/updating {tool} (timeout: {timeout_seconds//60}min)", allow_warnings=False, env_override=env):
+                        gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True, check=True, timeout=10).stdout.strip()
                         gobin = os.path.join(gopath, 'bin')
                         tool_path = os.path.join(gobin, tool)
                         print(f"{Colors.WHITE}  Verifying {tool} installation at {tool_path}...{Colors.END}")
