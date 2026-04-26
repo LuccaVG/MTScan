@@ -1,103 +1,67 @@
-Naabu
-Parâmetros (pt-br)
--host <alvo>: Define o alvo único para escaneamento.
--p <portas>: Especifica as portas a serem escaneadas (ex.: -p 80,443,1000-2000 ou -p 1-65535 para todas as portas).
--top-ports <N>: Escaneia as N portas mais comuns (ex.: -top-ports 100, -top-ports 1000).
--exclude-ports <portas>: Exclui portas específicas do escaneamento (ex.: -exclude-ports 80,443).
--c <threads>: Define o número de threads paralelas (padrão: 25).
--rate <taxa>: Define a taxa de pacotes por segundo (padrão: 1000).
--scan-type <tipo>: Define o tipo de escaneamento (syn ou connect).
--silent: Executa o escaneamento em modo silencioso, exibindo apenas os resultados.
--v: Ativa o modo verbose com informações detalhadas durante a execução.
--o <arquivo>: Salva os resultados do escaneamento em um arquivo.
--json: Gera a saída no formato JSON.
-Parameters (en)
--host <target>: Specifies the single target for scanning.
--p <ports>: Specifies the ports to scan (e.g., -p 80,443,1000-2000 or -p 1-65535 for all ports).
--top-ports <N>: Scans the top N most common ports (e.g., -top-ports 100, -top-ports 1000).
--exclude-ports <ports>: Excludes specific ports from the scan (e.g., -exclude-ports 80,443).
--c <threads>: Sets the number of parallel threads (default: 25).
--rate <rate>: Sets the rate of packets per second (default: 1000).
--scan-type <type>: Sets the scan type (syn or connect).
--silent: Runs the scan in silent mode, showing only results.
--v: Activates verbose mode with detailed information during execution.
--o <file>: Saves the scan results to a file.
--json: Outputs the results in JSON format.
-httpx
-Parâmetros (pt-br)
-<target>: O alvo é especificado diretamente sem uma flag (ex: httpx example.com).
--l <arquivo>: Define uma lista de alvos para escaneamento (geralmente saída do Naabu).
--silent: Executa o escaneamento em modo silencioso, exibindo apenas os resultados essenciais.
--o <arquivo>: Salva os resultados (URLs válidas, IPs, status HTTP, etc.) em um arquivo.
--title: Exibe o título da página HTML (útil para identificar serviços).
--status-code: Exibe o código de status HTTP (ex.: 200, 403).
--tech-detect: Detecta tecnologias usadas (ex.: Apache, WordPress).
--web-server: Mostra o servidor web (Apache, Nginx) via cabeçalho HTTP.
--follow-redirects: Segue redirecionamentos HTTP.
-Parameters (en)
-<target>: Target is specified directly without a flag (e.g., httpx example.com).
--l <file>: Specifies a list of targets for scanning (usually output from Naabu).
--silent: Runs the scan in silent mode, showing only essential results.
--o <file>: Saves the results (valid URLs, IPs, HTTP status, etc.) to a file.
--title: Displays the HTML page title (useful for identifying services).
--status-code: Displays the HTTP status code (e.g., 200, 403).
--tech-detect: Detects technologies used (e.g., Apache, WordPress).
--web-server: Shows the web server (Apache, Nginx) via HTTP headers.
--follow-redirects: Follows HTTP redirects.
-Nuclei
-Parâmetros (pt-br)
-Entrada
--u <alvo>: Escaneia um único alvo (URL ou host).
--l <arquivo>: Define um arquivo com múltiplos alvos (um por linha).
-Templates
--t <path>: Define o caminho para os templates Nuclei a serem utilizados.
--tags <tag1,tag2>: Executa apenas templates com as tags especificadas (ex.: cve, auth).
-Saída
--o <arquivo>: Salva as vulnerabilidades encontradas em um arquivo.
--jsonl: Salva a saída no formato JSON Lines (um achado por linha).
--silent: Executa o escaneamento em modo silencioso, exibindo apenas os resultados.
--store-resp: Armazena requests/responses no diretório ./nuclei_output.
-Execução e Configuração
--H <header>: Adiciona cabeçalhos HTTP personalizados.
--V <variável>: Define variáveis customizadas (formato: chave=valor).
-Outros
--update: Atualiza o binário do Nuclei.
--update-templates: Atualiza os templates para a versão mais recente.
-Parameters (en)
-Input
--u <target>: Scans a single target (URL or host).
--l <file>: Specifies a file with multiple targets (one per line).
-Templates
--t <path>: Specifies the path to the Nuclei templates to use.
--tags <tag1,tag2>: Runs only templates with the specified tags (e.g., cve, auth).
-Output
--o <file>: Saves vulnerabilities found to a file.
--jsonl: Outputs results in JSON Lines format (one finding per line).
--silent: Runs the scan in silent mode, showing only results.
--store-resp: Stores requests/responses in the ./nuclei_output directory.
-Execution and Configuration
--H <header>: Adds custom HTTP headers.
--V <variable>: Defines custom variables (format: key=value).
-Others
--update: Updates the Nuclei binary.
--update-templates: Updates templates to the latest version.
+MTScan command reference
 
-# Documentation for fix_dpkg.sh
+Supported interfaces:
+- python3 mtscan.py
+- python3 src/workflow.py
 
-## English
-The `fix_dpkg.sh` script is designed to ensure compatibility and proper execution of the `setup_tools.sh` script. It performs the following steps:
+There is no app interface yet.
 
-1. Converts the line endings of `setup_tools.sh` to Unix-style using the `sed` command. This step ensures that the script can be executed correctly in Unix-like environments, avoiding issues caused by Windows-style line endings.
-2. Checks if the `setup_tools.sh` file exists in the current directory. If the file is not found, it displays an error message and exits.
-3. Executes the `setup_tools.sh` script to perform its intended setup tasks.
+Run one tool:
+- python3 src/workflow.py -naabu -host example.com --top-ports 100
+- python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect
+- python3 src/workflow.py -nuclei -host https://example.com --severity critical,high
 
-This script is particularly useful in environments where line-ending mismatches might cause execution errors.
+Run all tools together:
+- python3 src/workflow.py --all -host example.com --top-ports 100 --save-output
 
-## Português
-O script `fix_dpkg.sh` foi projetado para garantir a compatibilidade e a execução correta do script `setup_tools.sh`. Ele realiza os seguintes passos:
+Windows command-construction checks:
+- python src/workflow.py --dry-run --all -host example.com --top-ports 100 --save-output
 
-1. Converte os finais de linha do arquivo `setup_tools.sh` para o formato Unix usando o comando `sed`. Este passo garante que o script possa ser executado corretamente em ambientes Unix-like, evitando problemas causados por finais de linha no formato Windows.
-2. Verifica se o arquivo `setup_tools.sh` existe no diretório atual. Caso o arquivo não seja encontrado, exibe uma mensagem de erro e encerra a execução.
-3. Executa o script `setup_tools.sh` para realizar as tarefas de configuração pretendidas.
+Naabu options:
+- -host, --host: target host
+- -p, --ports: ports, for example 80,443 or 1-1000
+- --top-ports: number of common ports to scan
+- --exclude-ports: ports to skip
+- --threads: concurrency
+- --rate: packets per second
+- --scan-type: connect or syn
+- --naabu-timeout: timeout
+- --naabu-retries: retries
 
-Este script é especialmente útil em ambientes onde incompatibilidades de finais de linha podem causar erros de execução.
+HTTPX options:
+- --title: show page titles
+- --status-code: show status codes
+- --tech-detect: detect technologies
+- --web-server: show web server header
+- --follow-redirects: follow redirects
+- --content-length: show content length
+- --response-time: show response time
+- --httpx-timeout: timeout
+- --httpx-threads: threads
+- --headers: comma-separated custom headers
+- --user-agent: custom User-Agent
+
+Nuclei options:
+- -t, --templates: template path or template selector
+- --template-path: template path
+- --tags: template tags
+- --severity: severity filter
+- --exclude-tags: excluded tags
+- --exclude-templates: excluded templates
+- --concurrency: template concurrency
+- --nuclei-rate-limit: request rate limit
+- --nuclei-timeout: request timeout
+- --nuclei-retries: retries
+- --custom-headers: comma-separated custom headers
+- --vars: template variables
+- --store-resp: store matched responses
+- --no-interactsh: disable Interactsh
+
+Output options:
+- --save-output: save tool output files
+- --json-output: save JSON/JSONL where supported
+- -o, --output-dir: choose output directory
+- --tool-silent: reduce tool output
+
+Safety:
+- Use only targets you own or are authorized to test.

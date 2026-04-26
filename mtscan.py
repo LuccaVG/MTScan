@@ -194,21 +194,24 @@ def print_main_menu():
     print("  [3] Vulnerability Assessment (nuclei)")
     print("      Security vulnerability scanning with 5000+ templates")
     print()
+    print("  [4] Complete Scan Chain       (naabu -> httpx -> nuclei)")
+    print("      Run port discovery, service analysis, and vulnerability checks")
+    print()
     print("MANAGEMENT OPERATIONS:")
     print("=" * 60)
-    print("  [4] View Previous Results")
+    print("  [5] View Previous Results")
     print("      Browse and analyze past scan results")
     print()
-    print("  [5] Update Nuclei Templates")
+    print("  [6] Update Nuclei Templates")
     print("      Download latest vulnerability templates")
     print()
-    print("  [6] Tool Configuration")
+    print("  [7] Tool Configuration")
     print("      Configure scanning parameters and settings")
     print()
-    print("  [7] Install/Update Tools")
+    print("  [8] Install/Update Tools")
     print("      Install or update security scanning tools")
     print()
-    print("  [8] Help & Documentation")
+    print("  [9] Help & Documentation")
     print("      View usage guides and tool documentation")
     print()
     print("  [0] Exit Program")
@@ -318,6 +321,10 @@ def run_scan(scan_type, target, **kwargs):
         print(f"\nConfiguring NUCLEI vulnerability scanner for target: {target}")
         show_scan_type_help("nuclei")
         flags = get_nuclei_flags()
+    elif scan_type == "all":
+        print(f"\nConfiguring COMPLETE scan chain for target: {target}")
+        print("This will run naabu, then pass discovered services to httpx, then pass HTTP targets to nuclei.")
+        flags = {}
     else:
         print(f"ERROR: Unknown scan type: {scan_type}")
         return False
@@ -360,7 +367,7 @@ def run_scan(scan_type, target, **kwargs):
         return False
     
     # Build command
-    cmd = ["python3", "src/workflow.py"]
+    cmd = [sys.executable, "src/workflow.py"]
     
     # Add tool-specific flag
     if scan_type == "naabu":
@@ -369,6 +376,8 @@ def run_scan(scan_type, target, **kwargs):
         cmd.append("-httpx")
     elif scan_type == "nuclei":
         cmd.append("-nuclei")
+    elif scan_type == "all":
+        cmd.append("--all")
     
     # Add target
     cmd.extend(["-host", target])
@@ -657,13 +666,13 @@ def run_scan(scan_type, target, **kwargs):
                     print(f"[DIRECTORY] {latest_dir}")
                     
                     # List key files
-                    for filename in ['comprehensive_scan_report.txt', 'naabu_results.txt', 'httpx_results.txt', 'nuclei_results.txt']:
+                    for filename in ['comprehensive_scan_report.txt', 'security_findings_report.md', 'naabu_results.txt', 'httpx_results.txt', 'nuclei_results.txt']:
                         filepath = os.path.join(latest_dir, filename)
                         if os.path.exists(filepath):
                             file_size = os.path.getsize(filepath)
                             print(f"[FILE] {filename} ({file_size:,} bytes)")
                     
-                    print(f"[ACCESS] Use menu option [4] to view detailed results")
+                    print(f"[ACCESS] Use menu option [5] to view detailed results")
             except OSError as e:
                 print(f"[ERROR] Could not access results directory: {e}")
         else:
@@ -766,14 +775,22 @@ def view_result_details(result_dir):
     print(f"SCAN RESULTS: {result_dir}")
     print("=" * 60)
     
-    # Look for the comprehensive report file
+    # Look for generated report files
     comprehensive_report = os.path.join(result_dir, "comprehensive_scan_report.txt")
+    findings_report = os.path.join(result_dir, "security_findings_report.md")
     
     try:
+        if os.path.exists(findings_report):
+            print("SECURITY FINDINGS REPORT:")
+            print("-" * 40)
+            with open(findings_report, 'r', encoding='utf-8', errors='ignore') as f:
+                print(f.read())
+            print()
+
         if os.path.exists(comprehensive_report):
             print("COMPREHENSIVE SCAN REPORT:")
             print("-" * 40)
-            with open(comprehensive_report, 'r') as f:
+            with open(comprehensive_report, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
                 print(content)
         else:
@@ -1718,7 +1735,7 @@ def main():
         print_tools_status()
         print_main_menu()
         
-        choice = input("Select option [0-8]: ").strip()
+        choice = input("Select option [0-9]: ").strip()
         
         if choice == "0":
             print("\nGoodbye!")
@@ -1739,19 +1756,24 @@ def main():
             if target:
                 run_scan("nuclei", target)
         elif choice == "4":
-            view_results()
+            # Complete scan chain
+            target = get_target_input()
+            if target:
+                run_scan("all", target)
         elif choice == "5":
-            update_templates()
+            view_results()
         elif choice == "6":
+            update_templates()
+        elif choice == "7":
             print("\nTool Configuration")
             print("Configuration options will be available in future updates.")
             input("Press Enter to continue...")
-        elif choice == "7":
-            install_tools()
         elif choice == "8":
+            install_tools()
+        elif choice == "9":
             show_help()
         else:
-            print("Invalid option. Please select 0-8.")
+            print("Invalid option. Please select 0-9.")
             input("Press Enter to continue...")
 
 if __name__ == "__main__":

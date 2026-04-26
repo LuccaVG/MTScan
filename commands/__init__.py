@@ -16,4 +16,4 @@ except ImportError as e:
     # Tools might not be installed yet
     import sys
     print(f"Warning: Could not import security tool wrappers ({str(e)})")
-    print("Make sure you've run setup_tools.sh to install all required components.")
+    print("Make sure you've run install/setup.py to install all required components.")

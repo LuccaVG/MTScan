@@ -213,6 +213,20 @@ def create_directory_if_not_exists(directory: str) -> bool:
 
 def get_executable_path(cmd: str) -> Optional[str]:
     """Find the path to an executable, checking PATH and common locations."""
+    try:
+        from tool_runner import get_executable_path as shared_get_executable_path
+        shared_path = shared_get_executable_path(cmd)
+        if shared_path:
+            return shared_path
+    except Exception:
+        try:
+            from src.tool_runner import get_executable_path as shared_get_executable_path
+            shared_path = shared_get_executable_path(cmd)
+            if shared_path:
+                return shared_path
+        except Exception:
+            pass
+
     # Check in PATH first
     cmd_path = shutil.which(cmd)
     if cmd_path:
@@ -224,6 +238,7 @@ def get_executable_path(cmd: str) -> Optional[str]:
         f"/root/go/bin/{cmd}",                           # Root's go/bin (common in Kali)
         f"/usr/local/go/bin/{cmd}",                      # System Go installation
         f"/usr/bin/{cmd}",                               # System package manager
+        "/usr/bin/httpx-toolkit" if cmd == "httpx" else "",
         f"/usr/local/bin/{cmd}",                         # Local installation
         f"/opt/go/bin/{cmd}",                            # Alternative Go location
         os.path.expanduser(f"~/.local/bin/{cmd}"),       # User's local bin

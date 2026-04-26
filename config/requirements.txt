@@ -10,14 +10,8 @@ rich==13.3.5
 # Progress and formatting
 tqdm==4.65.0
 
-# Utility
-pathlib==1.0.1
-
 # JSON processing
 jsonschema==4.19.0
 
 # YAML processing
 pyyaml==6.0.1
-
-# HTTP testing
-pytest-httpx==0.24.0
