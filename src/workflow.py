@@ -15,7 +15,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -135,7 +135,7 @@ def selected_tools(args: argparse.Namespace) -> List[str]:
     return tools
 
 
-def args_to_options(args: argparse.Namespace) -> Dict[str, object]:
+def args_to_options(args: argparse.Namespace) -> Dict[str, Any]:
     options = vars(args).copy()
     for reserved in (
         "target",
