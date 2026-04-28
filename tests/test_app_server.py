@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from typing import List, cast
+from typing import Dict, List, cast
 
 from src import app_server
 from src import tool_runner
@@ -26,6 +26,27 @@ class AppServerTests(unittest.TestCase):
 
     def test_requested_tools_for_chain_returns_all_tools(self):
         self.assertEqual(tuple(app_server.requested_tools_for_mode("chain")), app_server.tool_runner.SECURITY_TOOLS)
+
+    def test_public_summary_keeps_chart_data_for_app_graphs(self):
+        public = app_server.public_summary(
+            {
+                "severity_counts": {"critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0},
+                "category_counts": {"Known Vulnerability": 1},
+                "cve_findings": 1,
+                "chart_data": {
+                    "severity": {"critical": 1},
+                    "surface": {"open_ports": 1, "http_services": 1, "findings": 1},
+                    "categories": {"Known Vulnerability": 1},
+                    "cve_findings": 1,
+                },
+            }
+        )
+
+        chart_data = cast(Dict[str, object], public.get("chart_data"))
+        categories = cast(Dict[str, int], chart_data.get("categories"))
+
+        self.assertEqual(categories["Known Vulnerability"], 1)
+        self.assertEqual(public.get("cve_findings"), 1)
 
     def test_serialize_results_redacts_commands_and_paths(self):
         result = tool_runner.ToolResult(

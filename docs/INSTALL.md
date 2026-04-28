@@ -137,23 +137,23 @@ sudo apt autoremove
 sudo python3 install/setup.py
 ```
 
-## Portugues do Brasil
+## Português do Brasil
 
 O MTScan foi feito para Linux nativo. Windows e macOS podem ser usados para ler,
-editar, rodar dry-run e trabalhar na interface, mas a execucao real dos scanners
+editar, rodar dry-run e trabalhar na interface, mas a execução real dos scanners
 deve acontecer em um host ou VM Linux.
 
 ## Ambiente Suportado
 
-- Debian, Ubuntu, Kali, Arch ou uma distribuicao Linux parecida
+- Debian, Ubuntu, Kali, Arch ou uma distribuição Linux parecida
 - Python 3.8 ou mais novo
 - `pip3`
-- Go, quando a instalacao das ferramentas ProjectDiscovery for feita por codigo fonte
-- Internet para pacotes, ferramentas, templates do nuclei e varreduras em alvos publicos
+- Go, quando a instalação das ferramentas ProjectDiscovery for feita por código fonte
+- Internet para pacotes, ferramentas, templates do nuclei e varreduras em alvos públicos
 
-## Instalacao Completa
+## Instalação Completa
 
-Na raiz do repositorio:
+Na raiz do repositório:
 
 ```bash
 sudo python3 install/setup.py
@@ -162,19 +162,19 @@ sudo python3 install/setup.py
 O instalador:
 
 - Verifica requisitos do Linux
-- Instala pacotes do sistema quando possivel
-- Instala dependencias Python de `config/requirements.txt`
+- Instala pacotes do sistema quando possível
+- Instala dependências Python de `config/requirements.txt`
 - Instala ou atualiza `naabu`, `httpx` e `nuclei`
-- Expoe binarios em `/usr/local/bin` quando ha sudo
-- Atualiza templates do nuclei quando o nuclei esta instalado
+- Expõe binários em `/usr/local/bin` quando há sudo
+- Atualiza templates do nuclei quando o nuclei está instalado
 
-Se uma ferramenta estiver instalada mas nao for encontrada:
+Se uma ferramenta estiver instalada mas não for encontrada:
 
 ```bash
 export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
 ```
 
-## Apenas Dependencias Python
+## Apenas Dependências Python
 
 Para desenvolvimento ou dry-run:
 
@@ -182,12 +182,12 @@ Para desenvolvimento ou dry-run:
 python3 -m pip install -r config/requirements.txt
 ```
 
-O driver Cassandra e opcional para historico persistente de graficos. Se o
-Cassandra nao estiver disponivel, a aplicacao usa um arquivo JSONL local.
+O driver Cassandra é opcional para histórico persistente de gráficos. Se o
+Cassandra não estiver disponível, a aplicação usa um arquivo JSONL local.
 
-## Verificacao dos Scanners
+## Verificação dos Scanners
 
-Depois da instalacao:
+Depois da instalação:
 
 ```bash
 python3 src/workflow.py --check-tools
@@ -201,19 +201,19 @@ Ferramentas esperadas:
 
 ## Cassandra Local Opcional
 
-Suba o Cassandra para historico persistente dos graficos:
+Suba o Cassandra para histórico persistente dos gráficos:
 
 ```bash
 docker compose -f docker-compose.cassandra.yml up -d
 ```
 
-Depois inicie a aplicacao:
+Depois inicie a aplicação:
 
 ```bash
 python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
 
-Configuracoes de armazenamento:
+Configurações de armazenamento:
 
 ```bash
 export MTSCAN_STORAGE_BACKEND=auto
@@ -229,15 +229,15 @@ export MTSCAN_STORAGE_BACKEND=file
 export MTSCAN_HISTORY_FILE=data/scan_history.jsonl
 ```
 
-Desativar historico:
+Desativar histórico:
 
 ```bash
 export MTSCAN_STORAGE_BACKEND=off
 ```
 
-## Teste Rapido no Linux
+## Teste Rápido no Linux
 
-Este comando valida argumentos e criacao de caminhos de relatorio sem executar
+Este comando valida argumentos e criação de caminhos de relatório sem executar
 scanners de rede:
 
 ```bash

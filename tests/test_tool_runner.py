@@ -1,5 +1,7 @@
+import json
 import unittest
 from pathlib import Path
+from typing import Dict, List, cast
 from unittest.mock import patch
 
 from src import tool_runner
@@ -99,7 +101,88 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertIn("| Informational observations | 1 |", text)
         self.assertIn("exposed-panel", text)
         self.assertIn("## Informational Observations", text)
-        self.assertIn("| INFO | tech-detect |", text)
+        self.assertIn("| INFO | General Finding | tech-detect |", text)
+
+    def test_vulnerability_report_extracts_cve_context_and_fix_guidance(self):
+        output_dir = Path("tests") / "_cve_report_output"
+        output_dir.mkdir(exist_ok=True)
+        nuclei_file = output_dir / "nuclei_results.jsonl"
+        report = output_dir / tool_runner.REPORT_FILENAME
+        finding = {
+            "template-id": "CVE-2024-12345-example-rce",
+            "matched-at": "https://example.com/admin",
+            "matcher-name": "version-check",
+            "extracted-results": ["Example Product 1.0.0"],
+            "info": {
+                "name": "Example Product Remote Code Execution",
+                "severity": "critical",
+                "description": "Example Product before 1.2.3 allows remote command execution.",
+                "impact": "Attackers may execute commands as the service user.",
+                "remediation": "Upgrade Example Product to version 1.2.3 or later.",
+                "reference": ["https://vendor.example/advisory/CVE-2024-12345"],
+                "tags": ["cve", "rce"],
+                "classification": {
+                    "cve-id": "CVE-2024-12345",
+                    "cwe-id": "CWE-78",
+                },
+            },
+        }
+        nuclei_file.write_text(json.dumps(finding) + "\n", encoding="utf-8")
+
+        try:
+            summary = tool_runner.summarize_scan_results(
+                "example.com",
+                [tool_runner.ToolResult("nuclei", ["nuclei"], True, output_file=nuclei_file)],
+            )
+            tool_runner.write_vulnerability_report(
+                output_dir,
+                "example.com",
+                [tool_runner.ToolResult("nuclei", ["nuclei"], True, output_file=nuclei_file)],
+            )
+            text = report.read_text(encoding="utf-8")
+        finally:
+            nuclei_file.unlink(missing_ok=True)
+            report.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        findings = cast(List[Dict[str, object]], summary.get("findings"))
+        parsed = next(iter(findings))
+        cves = cast(List[str], parsed.get("cve"))
+        cwes = cast(List[str], parsed.get("cwe"))
+
+        self.assertEqual(cves, ["CVE-2024-12345"])
+        self.assertEqual(cwes, ["CWE-78"])
+        self.assertEqual(summary.get("cve_findings"), 1)
+        self.assertIn("chart_data", summary)
+        self.assertIn("https://nvd.nist.gov/vuln/detail/CVE-2024-12345", text)
+        self.assertIn("Upgrade Example Product to version 1.2.3 or later.", text)
+        self.assertIn("Example Product 1.0.0", text)
+
+    def test_text_nuclei_output_extracts_cve_from_template_id(self):
+        output_dir = Path("tests") / "_text_cve_output"
+        output_dir.mkdir(exist_ok=True)
+        nuclei_file = output_dir / "nuclei_results.txt"
+        nuclei_file.write_text(
+            "[CVE-2024-99999-panel] [http] [high] https://example.com\n",
+            encoding="utf-8",
+        )
+
+        try:
+            findings = tool_runner.parse_nuclei_findings(nuclei_file)
+        finally:
+            nuclei_file.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        parsed = next(iter(findings))
+        cves = cast(List[str], parsed.get("cve"))
+
+        self.assertEqual(cves, ["CVE-2024-99999"])
 
     def test_report_redacts_sensitive_command_values(self):
         output_dir = Path("tests") / "_redacted_report_output"

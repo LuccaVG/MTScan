@@ -54,6 +54,8 @@ PATH_COMMAND_VALUE_FLAGS = {
 NUCLEI_TEXT_FINDING_PATTERN = re.compile(
     r"^\[(?P<template>[^\]]+)\]\s+\[[^\]]+\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<matched>\S+)"
 )
+CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
+CWE_PATTERN = re.compile(r"\bCWE-\d+\b", re.IGNORECASE)
 TARGET_FORBIDDEN_PATTERN = re.compile(r"[\x00-\x1f\x7f\s]")
 BARE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:\-\[\]/]+$")
 SEVERITY_FILTER_VALUES = SECURITY_FINDING_SEVERITIES | {"info", "unknown"}
@@ -911,30 +913,114 @@ def _split_references(value: object) -> List[str]:
     return []
 
 
+def _flatten_values(*values: object) -> List[str]:
+    flattened: List[str] = []
+    for value in values:
+        if value in (None, ""):
+            continue
+        if isinstance(value, dict):
+            flattened.extend(_flatten_values(*value.values()))
+        elif isinstance(value, (list, tuple, set)):
+            flattened.extend(_flatten_values(*value))
+        else:
+            flattened.append(str(value))
+    return flattened
+
+
+def _extract_pattern_values(pattern: re.Pattern[str], *values: object) -> List[str]:
+    matches: List[str] = []
+    seen = set()
+    for text in _flatten_values(*values):
+        for match in pattern.findall(text):
+            normalized = str(match).upper()
+            if normalized not in seen:
+                seen.add(normalized)
+                matches.append(normalized)
+    return matches
+
+
+def _extract_cves(*values: object) -> List[str]:
+    return _extract_pattern_values(CVE_PATTERN, *values)
+
+
+def _extract_cwes(*values: object) -> List[str]:
+    return _extract_pattern_values(CWE_PATTERN, *values)
+
+
+def _finding_category_from_parts(*values: object) -> str:
+    text = " ".join(_flatten_values(*values)).lower()
+    if CVE_PATTERN.search(text):
+        return "Known Vulnerability"
+
+    category_rules = (
+        ("Remote Code Execution", ("rce", "remote-code-execution", "code-execution", "command-injection")),
+        ("SQL Injection", ("sqli", "sql-injection", "sql injection")),
+        ("Cross-Site Scripting", ("xss", "cross-site-scripting", "cross site scripting")),
+        ("Server-Side Request Forgery", ("ssrf", "server-side-request-forgery")),
+        ("File Read or Inclusion", ("lfi", "rfi", "file-inclusion", "path-traversal", "directory-traversal")),
+        ("Credential or Auth Risk", ("default-login", "credential", "password", "auth-bypass", "weak-login")),
+        ("Exposed Admin Surface", ("exposure", "panel", "dashboard", "admin", "debug", "directory-listing")),
+        ("TLS or Certificate", ("tls", "ssl", "certificate", "weak-cipher")),
+        ("Misconfiguration", ("misconfig", "missing-header", "security-header", "cors", "takeover")),
+    )
+    for category, tokens in category_rules:
+        if any(token in text for token in tokens):
+            return category
+    return "General Finding"
+
+
 def _normalize_finding(data: Dict[str, object]) -> Dict[str, object]:
     info = data.get("info") if isinstance(data.get("info"), dict) else {}
     info_dict = info if isinstance(info, dict) else {}
     classification = info_dict.get("classification") if isinstance(info_dict.get("classification"), dict) else {}
     classification_dict = classification if isinstance(classification, dict) else {}
 
+    references = _split_references(info_dict.get("reference") or data.get("reference"))
+    tags = _split_references(info_dict.get("tags"))
+    template_id = data.get("template-id") or data.get("template_id") or "N/A"
+    name = info_dict.get("name") or template_id or "Unknown finding"
+    description = info_dict.get("description") or "No description provided by the scanner output."
+    cves = _extract_cves(
+        classification_dict.get("cve-id"),
+        classification_dict.get("cve_id"),
+        classification_dict.get("cve"),
+        template_id,
+        name,
+        description,
+        references,
+        tags,
+    )
+    cwes = _extract_cwes(
+        classification_dict.get("cwe-id"),
+        classification_dict.get("cwe_id"),
+        classification_dict.get("cwe"),
+        template_id,
+        name,
+        description,
+        references,
+        tags,
+    )
     remediation = (
         info_dict.get("remediation")
         or info_dict.get("fix")
         or "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure."
     )
-    references = _split_references(info_dict.get("reference") or data.get("reference"))
-    cve = classification_dict.get("cve-id") or classification_dict.get("cve")
 
     return {
-        "name": info_dict.get("name") or data.get("template-id") or "Unknown finding",
+        "name": name,
         "severity": str(info_dict.get("severity") or data.get("severity") or "unknown").lower(),
-        "template_id": data.get("template-id") or data.get("template_id") or "N/A",
+        "template_id": template_id,
         "matched_at": data.get("matched-at") or data.get("matched") or data.get("host") or data.get("url") or "N/A",
-        "description": info_dict.get("description") or "No description provided by the scanner output.",
+        "description": description,
+        "impact": info_dict.get("impact") or "",
         "remediation": remediation,
         "references": references,
-        "cve": cve,
-        "tags": _split_references(info_dict.get("tags")),
+        "cve": cves,
+        "cwe": cwes,
+        "category": _finding_category_from_parts(name, template_id, description, tags, cves),
+        "tags": tags,
+        "matcher_name": data.get("matcher-name") or data.get("matcher_name") or "",
+        "extracted_results": _safe_list(data.get("extracted-results") or data.get("extracted_results")),
     }
 
 
@@ -993,17 +1079,29 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
         try:
             with path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
                 for row in csv.DictReader(handle):
+                    name = row.get("name") or row.get("template-id") or "Unknown finding"
+                    template_id = row.get("template-id") or row.get("template_id") or "N/A"
+                    description = row.get("description") or "No description provided by the scanner output."
+                    references = _split_references(row.get("reference"))
+                    tags = _split_references(row.get("tags"))
+                    cves = _extract_cves(row.get("cve-id"), row.get("cve"), name, template_id, description, references, tags)
+                    cwes = _extract_cwes(row.get("cwe-id"), row.get("cwe"), name, template_id, description, references, tags)
                     findings.append(
                         {
-                            "name": row.get("name") or row.get("template-id") or "Unknown finding",
+                            "name": name,
                             "severity": (row.get("severity") or "unknown").lower(),
-                            "template_id": row.get("template-id") or row.get("template_id") or "N/A",
+                            "template_id": template_id,
                             "matched_at": row.get("matched-at") or row.get("host") or row.get("url") or "N/A",
-                            "description": row.get("description") or "No description provided by the scanner output.",
+                            "description": description,
+                            "impact": row.get("impact") or "",
                             "remediation": row.get("remediation") or "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
-                            "references": _split_references(row.get("reference")),
-                            "cve": row.get("cve-id") or row.get("cve"),
-                            "tags": _split_references(row.get("tags")),
+                            "references": references,
+                            "cve": cves,
+                            "cwe": cwes,
+                            "category": _finding_category_from_parts(name, template_id, description, tags, cves),
+                            "tags": tags,
+                            "matcher_name": row.get("matcher-name") or row.get("matcher_name") or "",
+                            "extracted_results": [],
                         }
                     )
             return findings
@@ -1019,7 +1117,10 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
                 try:
                     data = json.loads(text)
                     if isinstance(data, dict):
-                        findings.append(_normalize_finding(data))
+                        finding = _normalize_finding(data)
+                        if str(finding.get("severity") or "").lower() in NUCLEI_FINDING_SEVERITIES:
+                            if finding.get("template_id") != "N/A" and finding.get("matched_at") != "N/A":
+                                findings.append(finding)
                         continue
                 except json.JSONDecodeError:
                     pass
@@ -1028,17 +1129,25 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
                 severity = match.group("severity").lower()
                 if severity not in NUCLEI_FINDING_SEVERITIES:
                     continue
+                template = match.group("template")
+                cves = _extract_cves(template)
+                cwes = _extract_cwes(template)
                 findings.append(
                     {
-                        "name": match.group("template"),
+                        "name": template,
                         "severity": severity,
-                        "template_id": match.group("template"),
+                        "template_id": template,
                         "matched_at": match.group("matched"),
                         "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
+                        "impact": "",
                         "remediation": "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
                         "references": [],
-                        "cve": None,
+                        "cve": cves,
+                        "cwe": cwes,
+                        "category": _finding_category_from_parts(template, cves),
                         "tags": [],
+                        "matcher_name": "",
+                        "extracted_results": [],
                     }
                 )
     except OSError:
@@ -1052,6 +1161,32 @@ def _severity_counts(findings: Sequence[Dict[str, object]]) -> Dict[str, int]:
         severity = str(finding.get("severity") or "unknown").lower()
         counts[severity if severity in counts else "unknown"] += 1
     return counts
+
+
+def _category_counts(findings: Sequence[Dict[str, object]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for finding in findings:
+        category = str(finding.get("category") or "General Finding")
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _chart_data(
+    open_ports: Sequence[str],
+    http_services: Sequence[str],
+    findings: Sequence[Dict[str, object]],
+    severity_counts: Dict[str, int],
+) -> Dict[str, object]:
+    return {
+        "severity": severity_counts,
+        "surface": {
+            "open_ports": len(open_ports),
+            "http_services": len(http_services),
+            "findings": len(findings),
+        },
+        "categories": _category_counts(findings),
+        "cve_findings": sum(1 for finding in findings if _safe_list(finding.get("cve"))),
+    }
 
 
 def _sorted_findings(findings: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -1093,29 +1228,115 @@ def _safe_list(value: object) -> List[object]:
     return cast(List[object], value) if isinstance(value, list) else []
 
 
+def _format_identifier_list(value: object) -> str:
+    items = [str(item) for item in _safe_list(value) if str(item).strip()]
+    if not items and value not in (None, "", []):
+        items = [str(value)]
+    return ", ".join(items) if items else "N/A"
+
+
+def _format_cve_links(value: object) -> str:
+    cves = [str(item).upper() for item in _safe_list(value) if str(item).strip()]
+    if not cves and value not in (None, "", []):
+        cves = _extract_cves(value)
+    if not cves:
+        return "N/A"
+    return ", ".join(f"[{cve}](https://nvd.nist.gov/vuln/detail/{cve})" for cve in cves)
+
+
+def _generic_remediation_text() -> str:
+    return "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure."
+
+
+def _finding_explanation(finding: Dict[str, object]) -> str:
+    description = _markdown_cell(finding.get("description"))
+    category = str(finding.get("category") or "General Finding")
+    cves = _format_identifier_list(finding.get("cve"))
+    template = _markdown_cell(finding.get("template_id"))
+    matched = _markdown_cell(finding.get("matched_at"))
+
+    if description and not description.startswith("Text output did not include"):
+        return description
+
+    if category == "Known Vulnerability" and cves != "N/A":
+        return (
+            f"Nuclei matched `{template}` against `{matched}` and associated it with {cves}. "
+            "Confirm the affected product and version, then treat the vendor advisory as the source of truth."
+        )
+    if category == "Remote Code Execution":
+        return "This may allow an attacker to run commands or code through the affected service."
+    if category == "SQL Injection":
+        return "This may allow an attacker to alter database queries, read data, or change application state."
+    if category == "Cross-Site Scripting":
+        return "This may allow attacker-controlled script to run in a user's browser in the context of the affected site."
+    if category == "Server-Side Request Forgery":
+        return "This may allow the application server to be tricked into making unintended network requests."
+    if category == "File Read or Inclusion":
+        return "This may expose local files or allow unsafe server-side file inclusion behavior."
+    if category == "Credential or Auth Risk":
+        return "This indicates weak, default, exposed, or bypassable authentication behavior."
+    if category == "Exposed Admin Surface":
+        return "This indicates an administrative, debug, or sensitive surface may be reachable by unintended users."
+    if category == "TLS or Certificate":
+        return "This indicates transport security configuration may be weak, expired, or otherwise unsafe."
+    if category == "Misconfiguration":
+        return "This indicates a configuration issue that can increase exposure or weaken expected protections."
+    return "Nuclei produced a finding for this target. Validate the evidence, then remediate according to the affected service."
+
+
+def _finding_impact(finding: Dict[str, object]) -> str:
+    impact = _markdown_cell(finding.get("impact"))
+    severity = str(finding.get("severity") or "unknown").lower()
+    category = str(finding.get("category") or "General Finding")
+    if impact:
+        return impact
+    if severity in {"critical", "high"}:
+        return "Potential impact is significant because the finding is ranked as a high-priority security issue."
+    if category == "Known Vulnerability":
+        return "Impact depends on the affected product and version; review the linked CVE advisory before closing."
+    if category == "Exposed Admin Surface":
+        return "Unexpected exposure can give attackers a starting point for enumeration, brute force, or abuse."
+    if category == "Credential or Auth Risk":
+        return "Weak authentication controls can lead to unauthorized access if the service is reachable."
+    return "Impact depends on whether the affected service is reachable, exploitable, and exposed to untrusted users."
+
+
 def _finding_fix_guidance(finding: Dict[str, object]) -> List[str]:
     severity = str(finding.get("severity") or "unknown").lower()
     name = str(finding.get("name") or "").lower()
+    category = str(finding.get("category") or "")
     tags = " ".join(str(item).lower() for item in _safe_list(finding.get("tags")))
-    cve = finding.get("cve")
+    cves = _safe_list(finding.get("cve"))
     guidance: List[str] = []
 
     remediation = _markdown_cell(finding.get("remediation"))
-    if remediation:
+    if remediation and remediation != _generic_remediation_text():
         guidance.append(remediation)
 
-    if cve:
-        guidance.append("Check the vendor advisory for the listed CVE and upgrade or backport the fixed package version.")
+    if cves:
+        guidance.append(f"Check the vendor advisory for {_format_identifier_list(cves)} and upgrade or backport the fixed package version.")
+    if category == "Remote Code Execution":
+        guidance.append("Patch immediately, remove public reachability where possible, and review logs for signs of exploitation.")
+    if category == "SQL Injection":
+        guidance.append("Use parameterized queries, remove unsafe string-built SQL, and verify server-side input handling.")
+    if category == "Cross-Site Scripting":
+        guidance.append("Encode output for the right context, sanitize rich input, and add a restrictive Content Security Policy where practical.")
+    if category == "Server-Side Request Forgery":
+        guidance.append("Restrict outbound requests with an allowlist, block link-local/internal metadata addresses, and validate URL parsing server-side.")
+    if category == "File Read or Inclusion":
+        guidance.append("Normalize paths, restrict file access to an allowlisted directory, and remove user-controlled include paths.")
     if any(token in name or token in tags for token in ("exposure", "panel", "dashboard", "admin", "debug")):
         guidance.append("Remove public access if it is not required, add authentication, and restrict access by network policy.")
     if any(token in name or token in tags for token in ("default-login", "credential", "password", "auth")):
         guidance.append("Rotate affected credentials and disable default or shared accounts.")
     if any(token in name or token in tags for token in ("xss", "sqli", "rce", "ssrf", "lfi", "rfi", "xxe")):
         guidance.append("Patch the vulnerable application component, then add input validation and server-side controls for the affected route.")
+    if not guidance:
+        guidance.append(_generic_remediation_text())
     if severity in {"critical", "high"}:
         guidance.append("After the fix, re-run the same nuclei template against the affected target before closing the item.")
-    elif not guidance:
-        guidance.append("Validate the affected service, apply the safest vendor-supported fix, and re-run the scan to confirm closure.")
+    else:
+        guidance.append("Re-run the scan after the change and keep the evidence with the remediation ticket.")
 
     deduped: List[str] = []
     for item in guidance:
@@ -1162,6 +1383,9 @@ def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[s
         "security_findings": len(security_findings),
         "observations": len(observations),
         "severity_counts": severity_counts,
+        "category_counts": _category_counts(findings),
+        "cve_findings": sum(1 for finding in findings if _safe_list(finding.get("cve"))),
+        "chart_data": _chart_data(open_ports, http_services, findings, severity_counts),
         "tools": [
             {
                 "tool": result.tool,
@@ -1197,6 +1421,8 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
         ]
     )
     severity_counts = cast(Dict[str, int], summary.get("severity_counts") or _severity_counts(all_findings))
+    category_counts = _category_counts(all_findings)
+    all_cves = sorted({str(cve).upper() for finding in all_findings for cve in _safe_list(finding.get("cve"))})
     risk_label = _overall_risk_label(severity_counts)
     generated_at = _dt.datetime.now().isoformat(timespec="seconds")
     report = output_dir / REPORT_FILENAME
@@ -1227,36 +1453,67 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
         f"| Low | {severity_counts.get('low', 0)} |",
         f"| Info | {severity_counts.get('info', 0)} |",
         "",
-        "## What Was Checked",
+        "## Finding Breakdown",
         "",
-        "- `naabu` discovered exposed TCP services.",
-        "- `httpx` identified reachable HTTP and HTTPS services and collected web context.",
-        "- `nuclei` checked discovered HTTP targets for known vulnerabilities, exposures, and misconfigurations.",
-        "",
+        "| Category | Count |",
+        "|---|---:|",
     ]
+    if category_counts:
+        for category, count in category_counts.items():
+            lines.append(f"| {_markdown_cell(category)} | {count} |")
+    else:
+        lines.append("| No parsed findings | 0 |")
+
+    lines.extend(["", "## CVE Summary", ""])
+    if all_cves:
+        lines.append("The scan output referenced these CVEs. Confirm the affected product and version before treating a CVE as exploitable.")
+        lines.append("")
+        for cve in all_cves:
+            lines.append(f"- [{cve}](https://nvd.nist.gov/vuln/detail/{cve})")
+        lines.append("")
+    else:
+        lines.extend(
+            [
+                "No CVE identifiers were parsed from the nuclei output.",
+                "For richer CVE metadata, run with `--json-output` so nuclei includes classification fields when templates provide them.",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "## What Was Checked",
+            "",
+            "- `naabu` discovered exposed TCP services.",
+            "- `httpx` identified reachable HTTP and HTTPS services and collected web context.",
+            "- `nuclei` checked discovered HTTP targets for known vulnerabilities, exposures, and misconfigurations.",
+            "",
+        ]
+    )
 
     if findings:
         lines.extend(
             [
                 "## Priority Findings",
                 "",
-                "| Priority | Severity | Finding | Affected target | Template | CVE |",
-                "|---:|---|---|---|---|---|",
+                "| Priority | Severity | Category | Finding | Affected target | Template | CVE |",
+                "|---:|---|---|---|---|---|---|",
             ]
         )
         for index, finding in enumerate(findings[:20], 1):
             lines.append(
-                "| {index} | {severity} | {name} | {matched} | {template} | {cve} |".format(
+                "| {index} | {severity} | {category} | {name} | {matched} | {template} | {cve} |".format(
                     index=index,
                     severity=_markdown_cell(finding.get("severity")).upper(),
+                    category=_markdown_cell(finding.get("category")),
                     name=_markdown_cell(finding.get("name")),
                     matched=_markdown_cell(finding.get("matched_at")),
                     template=_markdown_cell(finding.get("template_id")),
-                    cve=_markdown_cell(finding.get("cve") or "N/A"),
+                    cve=_markdown_cell(_format_cve_links(finding.get("cve"))),
                 )
             )
         if len(findings) > 20:
-            lines.append(f"| ... | ... | {len(findings) - 20} additional findings | ... | ... | ... |")
+            lines.append(f"| ... | ... | ... | {len(findings) - 20} additional findings | ... | ... | ... |")
         lines.append("")
     else:
         lines.extend(
@@ -1293,21 +1550,34 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
         lines.extend(["## Finding Details", ""])
         for index, finding in enumerate(findings, 1):
             references = _safe_list(finding.get("references"))
+            extracted = [str(item) for item in _safe_list(finding.get("extracted_results")) if str(item).strip()]
+            matcher_name = _markdown_cell(finding.get("matcher_name"))
             lines.extend(
                 [
                     f"### {index}. {_markdown_cell(finding.get('name'))}",
                     "",
                     f"- Severity: {_markdown_cell(finding.get('severity')).upper()}",
+                    f"- Category: {_markdown_cell(finding.get('category'))}",
                     f"- Affected target: `{_markdown_cell(finding.get('matched_at'))}`",
                     f"- Template: `{_markdown_cell(finding.get('template_id'))}`",
-                    f"- CVE: {_markdown_cell(finding.get('cve') or 'N/A')}",
-                    f"- What it means: {_markdown_cell(finding.get('description'))}",
+                    f"- CVE: {_format_cve_links(finding.get('cve'))}",
+                    f"- CWE: {_markdown_cell(_format_identifier_list(finding.get('cwe')))}",
+                    f"- Matcher: {_markdown_cell(matcher_name or 'N/A')}",
+                    "",
+                    f"Explanation: {_finding_explanation(finding)}",
+                    "",
+                    f"Potential impact: {_finding_impact(finding)}",
                     "",
                     "Recommended fix:",
                 ]
             )
             for step in _finding_fix_guidance(finding):
                 lines.append(f"- {step}")
+            if extracted:
+                lines.append("")
+                lines.append("Evidence extracted by nuclei:")
+                for item in extracted[:5]:
+                    lines.append(f"- `{_markdown_cell(item)}`")
             if references:
                 lines.append("")
                 lines.append("References:")
@@ -1322,17 +1592,19 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
                 "",
                 "These items are not counted as security risks, but they can help with validation and hardening.",
                 "",
-                "| Severity | Observation | Target | Template |",
-                "|---|---|---|---|",
+                "| Severity | Category | Observation | Target | Template | CVE |",
+                "|---|---|---|---|---|---|",
             ]
         )
         for observation in observations[:20]:
             lines.append(
-                "| {severity} | {name} | {matched} | {template} |".format(
+                "| {severity} | {category} | {name} | {matched} | {template} | {cve} |".format(
                     severity=_markdown_cell(observation.get("severity")).upper(),
+                    category=_markdown_cell(observation.get("category")),
                     name=_markdown_cell(observation.get("name")),
                     matched=_markdown_cell(observation.get("matched_at")),
                     template=_markdown_cell(observation.get("template_id")),
+                    cve=_markdown_cell(_format_cve_links(observation.get("cve"))),
                 )
             )
         lines.append("")

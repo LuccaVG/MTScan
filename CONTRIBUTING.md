@@ -53,37 +53,37 @@ Dry-run the complete chain:
 python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output --skip-network-check
 ```
 
-## Portugues do Brasil
+## Português do Brasil
 
-O MTScan atualmente pertence e e mantido por Lucca Vieira Gentilezza, o unico
-titular de copyright dos arquivos originais do projeto MTScan neste repositorio.
+O MTScan atualmente pertence e é mantido por Lucca Vieira Gentilezza, o único
+titular de copyright dos arquivos originais do projeto MTScan neste repositório.
 
-Contribuicoes sao bem-vindas quando melhoram testes defensivos de seguranca,
-documentacao, confiabilidade, relatorios ou seguranca da aplicacao local.
+Contribuições são bem-vindas quando melhoram testes defensivos de segurança,
+documentação, confiabilidade, relatórios ou segurança da aplicação local.
 
-## Regras de Contribuicao
+## Regras de Contribuição
 
 - Use o MTScan somente para testes autorizados.
-- Nao inclua dados privados de varredura, credenciais, tokens, dados de clientes
+- Não inclua dados privados de varredura, credenciais, tokens, dados de clientes
   ou dados de alvos de terceiros em issues, pull requests, testes ou capturas de
   tela.
-- Mantenha mudancas focadas e explique o impacto de seguranca quando relevante.
-- Adicione ou atualize testes ao mudar construcao de comandos, relatorios,
+- Mantenha mudanças focadas e explique o impacto de segurança quando relevante.
+- Adicione ou atualize testes ao mudar construção de comandos, relatórios,
   armazenamento, respostas da API ou tratamento de caminhos.
-- Mantenha documentacao em ingles primeiro e portugues do Brasil em segundo.
-- Nao adicione codigo, templates, binarios, logos ou assets de terceiros sem
-  permissao de redistribuicao e aviso documentado.
+- Mantenha documentação em inglês primeiro e português do Brasil em segundo.
+- Não adicione código, templates, binários, logos ou assets de terceiros sem
+  permissão de redistribuição e aviso documentado.
 
-## Licenciamento de Contribuicoes
+## Licenciamento de Contribuições
 
-A menos que exista um acordo escrito separado, contribuicoes enviadas a este
-repositorio sao oferecidas sob a mesma concessao multi-licenca do projeto:
+A menos que exista um acordo escrito separado, contribuições enviadas a este
+repositório são oferecidas sob a mesma concessão multi-licença do projeto:
 
 ```text
 Apache-2.0 OR MIT OR BSD-3-Clause
 ```
 
-Ferramentas e dependencias de terceiros nao sao relicenciadas por este projeto.
-Lucca Vieira Gentilezza nao reivindica propriedade de licenca sobre `naabu`,
-`httpx`, `nuclei`, seus templates, binarios, dependencias, nomes, logos ou
+Ferramentas e dependências de terceiros não são relicenciadas por este projeto.
+Lucca Vieira Gentilezza não reivindica propriedade de licença sobre `naabu`,
+`httpx`, `nuclei`, seus templates, binários, dependências, nomes, logos ou
 marcas.

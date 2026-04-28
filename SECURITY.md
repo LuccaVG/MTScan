@@ -54,42 +54,42 @@ MTScan can run active network scanners. Unauthorized scanning can be illegal,
 harmful, or disruptive. Always obtain permission, define scan scope, and respect
 rate limits.
 
-## Portugues do Brasil
+## Português do Brasil
 
-MTScan e uma ferramenta de testes de seguranca. Ela deve ser usada somente em
-sistemas que voce possui ou tem autorizacao explicita para avaliar.
+MTScan é uma ferramenta de testes de segurança. Ela deve ser usada somente em
+sistemas que você possui ou tem autorização explícita para avaliar.
 
 ## Escopo Suportado
 
-Problemas de seguranca neste repositorio incluem:
+Problemas de segurança neste repositório incluem:
 
-- Vazamentos na API da aplicacao web local
+- Vazamentos na API da aplicação web local
 - Tratamento inseguro de caminhos de arquivo
-- Redacao incorreta de comandos
-- Tratamento inseguro da saida dos scanners
-- Instalacao que exponha segredos ou escreva fora dos caminhos esperados
-- Documentacao que possa induzir uso inseguro
+- Redação incorreta de comandos
+- Tratamento inseguro da saída dos scanners
+- Instalação que exponha segredos ou escreva fora dos caminhos esperados
+- Documentação que possa induzir uso inseguro
 
-Achados que `naabu`, `httpx` ou `nuclei` encontram em um alvo de terceiro nao
-sao vulnerabilidades do proprio MTScan.
+Achados que `naabu`, `httpx` ou `nuclei` encontram em um alvo de terceiro não
+são vulnerabilidades do próprio MTScan.
 
 ## Como Reportar
 
-Se voce encontrar uma falha de seguranca no MTScan:
+Se você encontrar uma falha de segurança no MTScan:
 
-1. Nao publique detalhes de exploracao antes da revisao do mantenedor.
-2. Inclua descricao clara, arquivos ou endpoints afetados, passos de reproducao
+1. Não publique detalhes de exploração antes da revisão do mantenedor.
+2. Inclua descrição clara, arquivos ou endpoints afetados, passos de reprodução
    e impacto.
-3. Informe se segredos, caminhos, saida de scan ou dados do sistema podem vazar.
+3. Informe se segredos, caminhos, saída de scan ou dados do sistema podem vazar.
 4. Evite enviar credenciais reais, dados privados de varredura ou dados de
    alvos de terceiros.
 
 Se o projeto estiver no GitHub, use o fluxo de security advisory quando
-disponivel. Caso contrario, fale com o mantenedor de forma privada antes de
-abrir uma issue publica com detalhes sensiveis.
+disponível. Caso contrário, fale com o mantenedor de forma privada antes de
+abrir uma issue pública com detalhes sensíveis.
 
-## Uso Responsavel
+## Uso Responsável
 
-O MTScan pode executar scanners ativos de rede. Varredura sem autorizacao pode
-ser ilegal, prejudicial ou disruptiva. Sempre obtenha permissao, defina o escopo
+O MTScan pode executar scanners ativos de rede. Varredura sem autorização pode
+ser ilegal, prejudicial ou disruptiva. Sempre obtenha permissão, defina o escopo
 e respeite limites de taxa.

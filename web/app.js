@@ -32,13 +32,15 @@ const els = {
   http: document.getElementById("httpMetric"),
   risk: document.getElementById("riskMetric"),
   observations: document.getElementById("observationMetric"),
+  cve: document.getElementById("cveMetric"),
   log: document.getElementById("logOutput"),
   findings: document.getElementById("findingsTable"),
   files: document.getElementById("filesList"),
   history: document.getElementById("scanHistory"),
   severityChart: document.getElementById("severityChart"),
   surfaceChart: document.getElementById("surfaceChart"),
-  historyChart: document.getElementById("historyChart")
+  historyChart: document.getElementById("historyChart"),
+  categoryChart: document.getElementById("categoryChart")
 };
 
 function selectedMode() {
@@ -151,6 +153,7 @@ async function refreshScans() {
 
 function renderScan(scan) {
   const summary = scan.summary || {};
+  const chartData = summary.chart_data || {};
   els.scanTitle.textContent = scan.target ? `${scan.mode.toUpperCase()} - ${scan.target}` : "No scan selected";
   els.scanSubtitle.textContent = scan.error || scan.output_dir || scan.started_at || "Ready";
   els.scanState.textContent = scan.status || "Idle";
@@ -159,12 +162,14 @@ function renderScan(scan) {
   els.http.textContent = summary.http_services || 0;
   els.risk.textContent = summary.security_findings || 0;
   els.observations.textContent = summary.observations || 0;
+  els.cve.textContent = summary.cve_findings || chartData.cve_findings || 0;
   els.log.textContent = (scan.lines || []).join("\n");
   els.log.scrollTop = els.log.scrollHeight;
   renderFindings(summary.findings || []);
   renderFiles(scan);
-  drawSeverityChart(summary.severity_counts || {});
+  drawSeverityChart(chartData.severity || summary.severity_counts || {});
   drawSurfaceChart(summary);
+  drawCategoryChart(chartData.categories || summary.category_counts || {});
 }
 
 function renderFindings(findings) {
@@ -172,7 +177,7 @@ function renderFindings(findings) {
   if (!findings.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 3;
+    cell.colSpan = 5;
     cell.textContent = "No findings";
     row.appendChild(cell);
     els.findings.appendChild(row);
@@ -180,9 +185,10 @@ function renderFindings(findings) {
   }
   findings.forEach((finding) => {
     const row = document.createElement("tr");
-    ["severity", "name", "matched_at"].forEach((key) => {
+    ["severity", "category", "name", "cve", "matched_at"].forEach((key) => {
       const cell = document.createElement("td");
-      cell.textContent = finding[key] || "N/A";
+      const value = Array.isArray(finding[key]) ? finding[key].join(", ") : finding[key];
+      cell.textContent = value || "N/A";
       row.appendChild(cell);
     });
     els.findings.appendChild(row);
@@ -282,11 +288,13 @@ function drawSeverityChart(counts) {
 }
 
 function drawSurfaceChart(summary) {
+  const chartData = summary.chart_data || {};
+  const surface = chartData.surface || {};
   const labels = ["Ports", "HTTP", "Findings"];
   const values = [
-    Number(summary.open_ports || 0),
-    Number(summary.http_services || 0),
-    Number(summary.findings_total || 0)
+    Number(surface.open_ports ?? summary.open_ports ?? 0),
+    Number(surface.http_services ?? summary.http_services ?? 0),
+    Number(surface.findings ?? summary.findings_total ?? 0)
   ];
   const colors = ["#2764d9", "#0f8b8d", "#c17a00"];
   const { ctx, width, height } = canvasContext(els.surfaceChart);
@@ -321,6 +329,37 @@ function drawSurfaceChart(summary) {
     ctx.fillRect(width * 0.62, y - 10, 12, 12);
     ctx.fillStyle = "#18202f";
     ctx.fillText(`${label}: ${values[index]}`, width * 0.62 + 20, y);
+  });
+}
+
+function drawCategoryChart(counts) {
+  const entries = Object.entries(counts || {})
+    .map(([label, value]) => [label, Number(value || 0)])
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const { ctx, width, height } = canvasContext(els.categoryChart);
+  const padding = { left: 118, right: 18, top: 20, bottom: 20 };
+  const chartWidth = width - padding.left - padding.right;
+  const rowHeight = 26;
+  const maxValue = Math.max(1, ...entries.map((entry) => entry[1]));
+
+  ctx.font = "12px Segoe UI, Arial";
+  if (!entries.length) {
+    ctx.fillStyle = "#667085";
+    ctx.fillText("No finding categories yet", padding.left, padding.top + 28);
+    return;
+  }
+
+  entries.forEach(([label, value], index) => {
+    const y = padding.top + index * rowHeight;
+    const barWidth = Math.max(4, (chartWidth * value) / maxValue);
+    ctx.fillStyle = "#667085";
+    ctx.fillText(label.length > 18 ? `${label.slice(0, 17)}...` : label, 8, y + 14);
+    ctx.fillStyle = index % 2 === 0 ? "#2764d9" : "#0f8b8d";
+    ctx.fillRect(padding.left, y, barWidth, 16);
+    ctx.fillStyle = "#18202f";
+    ctx.fillText(String(value), padding.left + barWidth + 8, y + 13);
   });
 }
 
@@ -418,8 +457,11 @@ els.refreshHealth.addEventListener("click", refreshHealth);
 window.addEventListener("resize", () => {
   const scan = state.scans.find((item) => item.id === state.currentScanId);
   if (scan) {
-    drawSeverityChart((scan.summary || {}).severity_counts || {});
-    drawSurfaceChart(scan.summary || {});
+    const summary = scan.summary || {};
+    const chartData = summary.chart_data || {};
+    drawSeverityChart(chartData.severity || summary.severity_counts || {});
+    drawSurfaceChart(summary);
+    drawCategoryChart(chartData.categories || summary.category_counts || {});
   }
   drawHistoryChart();
 });
@@ -428,4 +470,5 @@ refreshHealth();
 refreshScans();
 drawSeverityChart({});
 drawSurfaceChart({});
+drawCategoryChart({});
 drawHistoryChart();

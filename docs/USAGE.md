@@ -194,16 +194,16 @@ Check scanner availability:
 python3 src/workflow.py --check-tools
 ```
 
-## Portugues do Brasil
+## Português do Brasil
 
-O MTScan tem tres caminhos principais de uso:
+O MTScan tem três caminhos principais de uso:
 
-- Opcao `[1]` no `mtscan.py`: cadeia CLI completa
-- Opcao `[2]` no `mtscan.py`: varredura CLI com uma unica ferramenta
-- Opcao `[3]` no `mtscan.py`: aplicacao web local
+- Opção `[1]` no `mtscan.py`: cadeia CLI completa
+- Opção `[2]` no `mtscan.py`: varredura CLI com uma única ferramenta
+- Opção `[3]` no `mtscan.py`: aplicação web local
 
-O menu, o CLI direto e a aplicacao usam o mesmo runner, mantendo saida e
-relatorios consistentes.
+O menu, o CLI direto e a aplicação usam o mesmo runner, mantendo saída e
+relatórios consistentes.
 
 ## Regras de Alvo
 
@@ -217,7 +217,7 @@ https://example.com
 127.0.0.1
 ```
 
-Use apenas alvos que voce possui ou tem permissao explicita por escrito para
+Use apenas alvos que você possui ou tem permissão explícita por escrito para
 avaliar.
 
 ## Cadeia CLI Completa
@@ -231,9 +231,9 @@ python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --
 Fluxo da cadeia:
 
 1. `naabu` descobre portas abertas.
-2. `httpx` verifica servicos HTTP ou HTTPS.
+2. `httpx` verifica serviços HTTP ou HTTPS.
 3. `nuclei` analisa URLs HTTP descobertas.
-4. MTScan escreve um unico relatorio: `vulnerability_report.md`.
+4. MTScan escreve um único relatório: `vulnerability_report.md`.
 
 ## Varreduras com Uma Ferramenta
 
@@ -243,13 +243,13 @@ Descoberta de portas:
 python3 src/workflow.py -naabu -host example.com --top-ports 100 --save-output
 ```
 
-Analise HTTP:
+Análise HTTP:
 
 ```bash
 python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect --save-output --json-output
 ```
 
-Avaliacao com nuclei:
+Avaliação com nuclei:
 
 ```bash
 python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --save-output --json-output
@@ -269,17 +269,17 @@ Iniciar:
 python3 mtscan.py
 ```
 
-Opcoes principais:
+Opções principais:
 
 - `[1] Complete CLI Scan Chain`: executa `naabu -> httpx -> nuclei`
 - `[2] Single Tool CLI Scan`: abre submenu para `naabu`, `httpx` ou `nuclei`
 - `[3] Launch Local Web App`: inicia o painel em localhost
 - `[4] View Previous Results`: abre pastas `results_*`
 - `[5] Update Nuclei Templates`: atualiza templates do nuclei
-- `[7] Install/Update Tools`: atualiza binarios ou tarefas de setup
-- `[8] Help & Documentation`: mostra referencia local
+- `[7] Install/Update Tools`: atualiza binários ou tarefas de setup
+- `[8] Help & Documentation`: mostra referência local
 
-## Aplicacao Web Local
+## Aplicação Web Local
 
 Iniciar:
 
@@ -293,36 +293,36 @@ Abrir:
 http://127.0.0.1:8765
 ```
 
-A aplicacao oferece varreduras completas ou por ferramenta, dry-run, saida ao
-vivo, historico, graficos e status de armazenamento.
+A aplicação oferece varreduras completas ou por ferramenta, dry-run, saída ao
+vivo, histórico, gráficos e status de armazenamento.
 
-Bind remoto so e permitido de forma explicita:
+Bind remoto só é permitido de forma explícita:
 
 ```bash
 python3 src/app_server.py --host 0.0.0.0 --port 8765 --allow-remote
 ```
 
-Use bind remoto apenas atras de controles confiaveis, como rede de laboratorio
-privada ou proxy reverso com autenticacao.
+Use bind remoto apenas atrás de controles confiáveis, como rede de laboratório
+privada ou proxy reverso com autenticação.
 
-## Relatorio
+## Relatório
 
-Varreduras salvas criam uma pasta `results_*`. O relatorio principal e:
+Varreduras salvas criam uma pasta `results_*`. O relatório principal é:
 
 ```text
 vulnerability_report.md
 ```
 
 Ele deve ser lido nesta ordem: resumo executivo, severidades, achados
-prioritarios, plano de correcao, detalhes, contexto de exposicao e notas das
+prioritários, plano de correção, detalhes, contexto de exposição e notas das
 ferramentas.
 
-## Armazenamento para Graficos
+## Armazenamento para Gráficos
 
-A aplicacao web armazena resumos de varreduras concluidas, nao a saida bruta
-dos scanners, para alimentar os graficos.
+A aplicação web armazena resumos de varreduras concluídas, não a saída bruta
+dos scanners, para alimentar os gráficos.
 
-Modo padrao:
+Modo padrão:
 
 ```bash
 export MTSCAN_STORAGE_BACKEND=auto

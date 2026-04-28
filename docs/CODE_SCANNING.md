@@ -48,34 +48,34 @@ After pushing to GitHub, open the repository Security tab and check:
 - Dependabot alerts
 - Dependency review results on pull requests
 
-## Portugues do Brasil
+## Português do Brasil
 
-O MTScan usa uma pipeline de seguranca em camadas no GitHub em
+O MTScan usa uma pipeline de segurança em camadas no GitHub em
 `.github/workflows/code-scanning.yml`.
 
 O workflow executa:
 
-- CodeQL para analise de seguranca em Python e JavaScript
+- CodeQL para análise de segurança em Python e JavaScript
 - Semgrep com regras default, security-audit e secrets, enviado como SARIF
-- `pip-audit` para dependencias Python vulneraveis em `config/requirements.txt`
-- Bandit para padroes de seguranca em Python
+- `pip-audit` para dependências Python vulneráveis em `config/requirements.txt`
+- Bandit para padrões de segurança em Python
 - Dependency Review em pull requests
 
 CodeQL e Semgrep enviam achados para o code scanning do GitHub. Bandit e
-`pip-audit` enviam relatorios JSON como artefatos do workflow. Dependency Review
-e `pip-audit` cobrem risco de dependencias que scanners de codigo podem nao
+`pip-audit` enviam relatórios JSON como artefatos do workflow. Dependency Review
+e `pip-audit` cobrem risco de dependências que scanners de código podem não
 enxergar.
 
-Nenhum scanner automatico encontra todas as vulnerabilidades possiveis. Esta
-pipeline serve para ampliar cobertura e dar alerta cedo, nao para substituir
-revisao manual, modelagem de ameacas ou testes no Linux.
+Nenhum scanner automático encontra todas as vulnerabilidades possíveis. Esta
+pipeline serve para ampliar cobertura e dar alerta cedo, não para substituir
+revisão manual, modelagem de ameaças ou testes no Linux.
 
 ## Requisitos no GitHub
 
-Code scanning funciona em repositorios publicos no GitHub. Repositorios privados
+Code scanning funciona em repositórios públicos no GitHub. Repositórios privados
 ou internos podem exigir GitHub Code Security ou GitHub Advanced Security.
 
-As permissoes necessarias estao declaradas no workflow:
+As permissões necessárias estão declaradas no workflow:
 
 - `security-events: write` para CodeQL e uploads SARIF
 - `contents: read` para checkout
@@ -88,9 +88,9 @@ O workflow roda em:
 - Pushes para qualquer branch
 - Pull requests
 - Varreduras semanais agendadas
-- Execucao manual via `workflow_dispatch`
+- Execução manual via `workflow_dispatch`
 
-Depois de enviar ao GitHub, abra a aba Security do repositorio e verifique:
+Depois de enviar ao GitHub, abra a aba Security do repositório e verifique:
 
 - Code scanning alerts
 - Dependabot alerts

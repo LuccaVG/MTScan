@@ -108,6 +108,10 @@
           <span>Observations</span>
           <strong id="observationMetric">0</strong>
         </div>
+        <div class="metric">
+          <span>CVE Findings</span>
+          <strong id="cveMetric">0</strong>
+        </div>
       </div>
 
       <div class="chart-grid">
@@ -122,6 +126,10 @@
         <section class="chart-panel">
           <div class="chart-title">History</div>
           <canvas id="historyChart" width="520" height="230"></canvas>
+        </section>
+        <section class="chart-panel">
+          <div class="chart-title">Finding Types</div>
+          <canvas id="categoryChart" width="520" height="230"></canvas>
         </section>
       </div>
 
@@ -140,7 +148,9 @@
             <thead>
               <tr>
                 <th>Severity</th>
+                <th>Category</th>
                 <th>Finding</th>
+                <th>CVE</th>
                 <th>Target</th>
               </tr>
             </thead>

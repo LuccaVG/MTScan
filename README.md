@@ -180,34 +180,34 @@ dependencies, names, logos, or trademarks.
 
 ## Português do Brasil
 
-MTScan e um kit de analise de vulnerabilidades focado em Linux que orquestra os
+MTScan é um kit de análise de vulnerabilidades focado em Linux que orquestra os
 scanners ProjectDiscovery `naabu`, `httpx` e `nuclei`.
 
-Ele pode ser usado de tres formas:
+Ele pode ser usado de três formas:
 
 - Cadeia completa no CLI: `naabu -> httpx -> nuclei`
-- Varredura CLI com uma unica ferramenta: `naabu`, `httpx` ou `nuclei`
-- Aplicacao web local: painel em localhost com saida ao vivo, historico e graficos
+- Varredura CLI com uma única ferramenta: `naabu`, `httpx` ou `nuclei`
+- Aplicação web local: painel em localhost com saída ao vivo, histórico e gráficos
 
-Use o MTScan somente em sistemas que voce possui ou tem permissao explicita
+Use o MTScan somente em sistemas que você possui ou tem permissão explícita
 para testar.
 
-## Relatorio Principal
+## Relatório Principal
 
-Cada varredura salva gera um unico relatorio humano:
+Cada varredura salva gera um único relatório humano:
 
 ```text
 vulnerability_report.md
 ```
 
-Esse relatorio mostra, explica e ajuda a corrigir vulnerabilidades. Ele inclui
-resumo executivo, severidades, achados prioritarios, plano de correcao, detalhes
-dos achados, contexto de exposicao e notas de execucao das ferramentas.
+Esse relatório mostra, explica e ajuda a corrigir vulnerabilidades. Ele inclui
+resumo executivo, severidades, achados prioritários, plano de correção, detalhes
+dos achados, contexto de exposição e notas de execução das ferramentas.
 
-Use `--json-output` sempre que possivel para enriquecer o relatorio com
-descricoes, referencias e remediacoes vindas do nuclei.
+Use `--json-output` sempre que possível para enriquecer o relatório com
+descrições, referências e remediações vindas do nuclei.
 
-## Instalacao
+## Instalação
 
 Na raiz do projeto:
 
@@ -215,15 +215,15 @@ Na raiz do projeto:
 sudo python3 install/setup.py
 ```
 
-Se o shell nao encontrar as ferramentas depois da instalacao:
+Se o shell não encontrar as ferramentas depois da instalação:
 
 ```bash
 export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
 ```
 
-Mais detalhes estao em [docs/INSTALL.md](docs/INSTALL.md).
+Mais detalhes estão em [docs/INSTALL.md](docs/INSTALL.md).
 
-## Uso Rapido
+## Uso Rápido
 
 Cadeia completa:
 
@@ -239,7 +239,7 @@ python3 src/workflow.py -httpx -host example.com --title --status-code --tech-de
 python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --json-output
 ```
 
-Aplicacao local:
+Aplicação local:
 
 ```bash
 python3 src/app_server.py --host 127.0.0.1 --port 8765
@@ -249,9 +249,9 @@ Abra `http://127.0.0.1:8765`.
 
 ## Armazenamento Local
 
-A aplicacao web guarda resumos de varreduras concluidas para alimentar os
-graficos. Ela tenta usar Cassandra primeiro e volta para `data/scan_history.jsonl`
-se o Cassandra nao estiver disponivel.
+A aplicação web guarda resumos de varreduras concluídas para alimentar os
+gráficos. Ela tenta usar Cassandra primeiro e volta para `data/scan_history.jsonl`
+se o Cassandra não estiver disponível.
 
 Subir Cassandra local:
 
@@ -260,15 +260,15 @@ docker compose -f docker-compose.cassandra.yml up -d
 python3 src/app_server.py
 ```
 
-## Licenca
+## Licença
 
-MTScan pertence a Lucca Vieira Gentilezza e e open source sob uma concessao
-multi-licenca: Apache-2.0 OR MIT OR BSD-3-Clause. Veja [LICENSE](LICENSE),
+MTScan pertence a Lucca Vieira Gentilezza e é open source sob uma concessão
+multi-licença: Apache-2.0 OR MIT OR BSD-3-Clause. Veja [LICENSE](LICENSE),
 [NOTICE](NOTICE), [licenses/](licenses/) e [docs/LICENSING.md](docs/LICENSING.md).
 
 Copyright 2026 Lucca Vieira Gentilezza.
 
-As ferramentas de terceiros mantem suas proprias licencas upstream. Lucca Vieira
-Gentilezza nao reivindica propriedade de licenca ou direito de relicenciar as
+As ferramentas de terceiros mantêm suas próprias licenças upstream. Lucca Vieira
+Gentilezza não reivindica propriedade de licença ou direito de relicenciar as
 ferramentas usadas por este projeto, incluindo `naabu`, `httpx`, `nuclei`, seus
-templates, binarios, dependencias, nomes, logos ou marcas.
+templates, binários, dependências, nomes, logos ou marcas.

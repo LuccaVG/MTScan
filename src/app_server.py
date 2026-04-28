@@ -258,6 +258,9 @@ def public_summary(summary: Dict[str, object]) -> Dict[str, object]:
         "security_findings",
         "observations",
         "severity_counts",
+        "category_counts",
+        "cve_findings",
+        "chart_data",
         "findings",
     ):
         if key in summary:

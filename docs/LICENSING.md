@@ -75,67 +75,67 @@ Before redistributing a package that bundles any third-party scanner binary,
 template set, or dependency, review that upstream project's license and notice
 requirements.
 
-## Portugues do Brasil
+## Português do Brasil
 
-O MTScan pertence a Lucca Vieira Gentilezza. Lucca Vieira Gentilezza e o unico
-titular de copyright dos arquivos originais do projeto MTScan neste repositorio,
+O MTScan pertence a Lucca Vieira Gentilezza. Lucca Vieira Gentilezza é o único
+titular de copyright dos arquivos originais do projeto MTScan neste repositório,
 exceto quando um arquivo declarar algo diferente ou quando software de terceiros
-mantiver sua propria licenca upstream.
+mantiver sua própria licença upstream.
 
-O MTScan e distribuido por uma concessao multi-licenca. Quem recebe o projeto
-pode escolher qualquer uma destas licencas open source aprovadas pela OSI:
+O MTScan é distribuído por uma concessão multi-licença. Quem recebe o projeto
+pode escolher qualquer uma destas licenças open source aprovadas pela OSI:
 
 - Apache License 2.0: `licenses/Apache-2.0.txt`
 - MIT License: `licenses/MIT.txt`
 - BSD 3-Clause License: `licenses/BSD-3-Clause.txt`
 
-A expressao SPDX do projeto e:
+A expressão SPDX do projeto é:
 
 ```text
 Apache-2.0 OR MIT OR BSD-3-Clause
 ```
 
-O arquivo `LICENSE` na raiz e o seletor de licenca. A pasta `licenses/` contem
-os textos completos das licencas e os avisos de terceiros.
+O arquivo `LICENSE` na raiz é o seletor de licença. A pasta `licenses/` contém
+os textos completos das licenças e os avisos de terceiros.
 
 ## Precisa Submeter?
 
-Nao e necessario submeter nada para usar estas licencas open source padrao no
-repositorio. Voce nao precisa enviar Apache-2.0, MIT ou BSD-3-Clause para OSI,
-SPDX, Apache Software Foundation, MIT ou Berkeley apenas para aplica-las ao seu
-projeto. A pratica normal em open source e publicar o `LICENSE` na raiz, incluir
-os textos completos das licencas, manter avisos claros de copyright e separar os
+Não é necessário submeter nada para usar estas licenças open source padrão no
+repositório. Você não precisa enviar Apache-2.0, MIT ou BSD-3-Clause para OSI,
+SPDX, Apache Software Foundation, MIT ou Berkeley apenas para aplicá-las ao seu
+projeto. A prática normal em open source é publicar o `LICENSE` na raiz, incluir
+os textos completos das licenças, manter avisos claros de copyright e separar os
 avisos de terceiros.
 
-A protecao de copyright geralmente existe automaticamente quando codigo original
-e criado e fixado em arquivos. Registro opcional de software ainda pode ser util
+A proteção de copyright geralmente existe automaticamente quando código original
+é criado e fixado em arquivos. Registro opcional de software ainda pode ser útil
 como prova de autoria ou titularidade. No Brasil, o INPI oferece registro de
 software. Nos Estados Unidos, o U.S. Copyright Office oferece registro de
-copyright e beneficios especificos de registro publico e enforcement. Isto nao
-e aconselhamento juridico, e um advogado e a pessoa certa para decisoes de
+copyright e benefícios específicos de registro público e enforcement. Isto não
+é aconselhamento jurídico, e um advogado é a pessoa certa para decisões de
 enforcement, empresa ou licenciamento comercial.
 
-Referencias oficiais:
+Referências oficiais:
 
-- Lista de licencas da Open Source Initiative: https://opensource.org/licenses
+- Lista de licenças da Open Source Initiative: https://opensource.org/licenses
 - Guia de registro de software do INPI: https://www.gov.br/inpi/pt-br/servicos/programas-de-computador/guia-basico
 - FAQ de registro do U.S. Copyright Office: https://www.copyright.gov/help/faq/faq-register.html
 
-## Por Que Essas Licencas
+## Por Que Essas Licenças
 
-Apache-2.0, MIT e BSD-3-Clause sao licencas permissivas amplamente usadas,
-reconhecidas institucionalmente e aprovadas pela OSI. Isso da aos usuarios um
+Apache-2.0, MIT e BSD-3-Clause são licenças permissivas amplamente usadas,
+reconhecidas institucionalmente e aprovadas pela OSI. Isso dá aos usuários um
 caminho claro de uso open source enquanto preserva a titularidade de copyright
 do autor.
 
-Apache-2.0 e util quando usuarios querem linguagem explicita sobre patentes. MIT
-e BSD 3-Clause sao opcoes permissivas simples e familiares no ecossistema open
+Apache-2.0 é útil quando usuários querem linguagem explícita sobre patentes. MIT
+e BSD 3-Clause são opções permissivas simples e familiares no ecossistema open
 source.
 
 ## Ferramentas de Terceiros
 
-O MTScan orquestra ferramentas externas. Essas ferramentas mantem suas proprias
-licencas, avisos, marcas e termos upstream.
+O MTScan orquestra ferramentas externas. Essas ferramentas mantêm suas próprias
+licenças, avisos, marcas e termos upstream.
 
 Ferramentas externas principais:
 
@@ -143,10 +143,10 @@ Ferramentas externas principais:
 - `httpx`
 - `nuclei`
 
-Lucca Vieira Gentilezza nao reivindica copyright, propriedade de licenca,
+Lucca Vieira Gentilezza não reivindica copyright, propriedade de licença,
 propriedade de marca ou direito de relicenciar essas ferramentas, seus
-templates, binarios, dependencias, nomes, logos ou marcas.
+templates, binários, dependências, nomes, logos ou marcas.
 
-Antes de redistribuir um pacote que inclua binarios de scanners de terceiros,
-templates ou dependencias, revise a licenca e os requisitos de aviso do projeto
+Antes de redistribuir um pacote que inclua binários de scanners de terceiros,
+templates ou dependências, revise a licença e os requisitos de aviso do projeto
 upstream.
