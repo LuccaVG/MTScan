@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from typing import Dict, cast
 
 from src import scan_storage
 
@@ -37,8 +38,10 @@ class ScanStorageTests(unittest.TestCase):
 
         self.assertEqual(len(scans), 1)
         self.assertIsNotNone(fetched)
+        assert fetched is not None
+        summary = cast(Dict[str, object], scans[0]["summary"])
         self.assertEqual(scans[0]["target"], "example.com")
-        self.assertEqual(scans[0]["summary"]["open_ports"], 2)
+        self.assertEqual(summary["open_ports"], 2)
         self.assertEqual(fetched["report_file"], "vulnerability_report.md")
 
     def test_invalid_cassandra_identifier_is_rejected(self):

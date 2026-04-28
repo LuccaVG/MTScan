@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from typing import List, cast
 
 from src import app_server
 from src import tool_runner
@@ -43,11 +44,12 @@ class AppServerTests(unittest.TestCase):
         )
 
         public = app_server.serialize_results([result])[0]
+        command_preview = cast(List[str], public["command_preview"])
 
         self.assertEqual(public["output_file"], "httpx_results.txt")
-        self.assertIn("[redacted]", public["command_preview"])
-        self.assertNotIn("secret", " ".join(public["command_preview"]))
-        self.assertNotIn("C:\\Users", " ".join(public["command_preview"]))
+        self.assertIn("[redacted]", command_preview)
+        self.assertNotIn("secret", " ".join(command_preview))
+        self.assertNotIn("C:\\Users", " ".join(command_preview))
 
     def test_health_payload_does_not_expose_local_paths(self):
         health = app_server.health_payload()
