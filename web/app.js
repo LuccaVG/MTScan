@@ -37,7 +37,8 @@ const els = {
   files: document.getElementById("filesList"),
   history: document.getElementById("scanHistory"),
   severityChart: document.getElementById("severityChart"),
-  surfaceChart: document.getElementById("surfaceChart")
+  surfaceChart: document.getElementById("surfaceChart"),
+  historyChart: document.getElementById("historyChart")
 };
 
 function selectedMode() {
@@ -78,7 +79,11 @@ async function refreshHealth() {
     const toolText = Object.entries(health.tools || {})
       .map(([tool, info]) => `${tool}: ${info.available === "yes" ? "ok" : "missing"}`)
       .join(" | ");
-    els.environment.textContent = `${health.platform}; ${toolText}`;
+    const storage = health.storage || {};
+    const storageText = storage.backend
+      ? `storage: ${storage.backend}${storage.available === "yes" ? "" : " unavailable"}`
+      : "storage: unknown";
+    els.environment.textContent = `${health.platform}; ${toolText}; ${storageText}`;
   } catch (error) {
     els.environment.textContent = error.message;
   }
@@ -134,6 +139,11 @@ async function refreshScans() {
     const data = await api("/api/scans");
     state.scans = data.scans || [];
     renderHistory();
+    drawHistoryChart();
+    if (!state.currentScanId && state.scans.length) {
+      state.currentScanId = state.scans[0].id;
+      renderScan(state.scans[0]);
+    }
   } catch (error) {
     els.history.textContent = error.message;
   }
@@ -184,6 +194,10 @@ function renderFiles(scan) {
   const rows = [];
   if (scan.output_dir) {
     rows.push({ label: "Output directory", value: scan.output_dir });
+  }
+  const reportFile = scan.report_file || (scan.summary || {}).report_file;
+  if (reportFile) {
+    rows.push({ label: "Vulnerability report", value: reportFile });
   }
   (scan.results || []).forEach((result) => {
     if (result.output_file) {
@@ -310,6 +324,86 @@ function drawSurfaceChart(summary) {
   });
 }
 
+function drawHistoryChart() {
+  const scans = state.scans
+    .filter((scan) => scan.summary && !scan.dry_run)
+    .slice()
+    .reverse()
+    .slice(-12);
+  const { ctx, width, height } = canvasContext(els.historyChart);
+  const padding = { left: 34, right: 14, top: 22, bottom: 34 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  const riskValues = scans.map((scan) => Number((scan.summary || {}).security_findings || 0));
+  const portValues = scans.map((scan) => Number((scan.summary || {}).open_ports || 0));
+  const maxValue = Math.max(1, ...riskValues, ...portValues);
+
+  ctx.strokeStyle = "#d9dee8";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, padding.top + chartHeight);
+  ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+  ctx.stroke();
+
+  if (!scans.length) {
+    ctx.fillStyle = "#667085";
+    ctx.font = "13px Segoe UI, Arial";
+    ctx.fillText("No stored scans", padding.left + 8, padding.top + 28);
+    return;
+  }
+
+  function point(index, value) {
+    const x = scans.length === 1
+      ? padding.left + chartWidth / 2
+      : padding.left + (chartWidth * index) / (scans.length - 1);
+    const y = padding.top + chartHeight - (chartHeight * value) / maxValue;
+    return { x, y };
+  }
+
+  function drawLine(values, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    values.forEach((value, index) => {
+      const p = point(index, value);
+      if (index === 0) {
+        ctx.moveTo(p.x, p.y);
+      } else {
+        ctx.lineTo(p.x, p.y);
+      }
+    });
+    ctx.stroke();
+    ctx.fillStyle = color;
+    values.forEach((value, index) => {
+      const p = point(index, value);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  drawLine(portValues, "#2764d9");
+  drawLine(riskValues, "#bd2f2f");
+
+  ctx.font = "12px Segoe UI, Arial";
+  ctx.fillStyle = "#2764d9";
+  ctx.fillText("Ports", padding.left + 4, 16);
+  ctx.fillStyle = "#bd2f2f";
+  ctx.fillText("Findings", padding.left + 58, 16);
+  ctx.fillStyle = "#667085";
+  ctx.fillText(String(maxValue), 6, padding.top + 4);
+  ctx.fillText("0", 18, padding.top + chartHeight);
+  scans.forEach((scan, index) => {
+    if (index !== 0 && index !== scans.length - 1) {
+      return;
+    }
+    const p = point(index, 0);
+    const label = String(scan.finished_at || scan.created_at || "").slice(5, 10) || `${index + 1}`;
+    ctx.fillText(label, Math.max(0, Math.min(width - 36, p.x - 14)), height - 12);
+  });
+}
+
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
@@ -327,9 +421,11 @@ window.addEventListener("resize", () => {
     drawSeverityChart((scan.summary || {}).severity_counts || {});
     drawSurfaceChart(scan.summary || {});
   }
+  drawHistoryChart();
 });
 
 refreshHealth();
 refreshScans();
 drawSeverityChart({});
 drawSurfaceChart({});
+drawHistoryChart();

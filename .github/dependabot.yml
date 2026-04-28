@@ -1,7 +1,10 @@
 version: 2
 updates:
-  # Python dependencies (pip)
   - package-ecosystem: "pip"
-    directory: "/" # Assuming the Python dependencies (requirements.txt) are in the root directory
+    directory: "/config"
     schedule:
-      interval: "weekly" # Check for updates weekly
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,140 +1,274 @@
 # MTScan
 
-MTScan is a Linux-focused command-line toolkit that runs three ProjectDiscovery
-tools:
+MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates the
+ProjectDiscovery scanners `naabu`, `httpx`, and `nuclei`.
 
-- `naabu` for port discovery
-- `httpx` for HTTP service analysis
-- `nuclei` for vulnerability scanning
+It is designed to be usable in three ways:
 
-The project has two supported interfaces:
+- Complete CLI chain: `naabu -> httpx -> nuclei`
+- Single-tool CLI scans: choose only `naabu`, `httpx`, or `nuclei`
+- Local web app: a localhost dashboard with live output, scan history, and graph data
 
-- Local web app: `python3 src/app_server.py`
-- Interactive menu: `python3 mtscan.py`
-- Direct CLI: `python3 src/workflow.py`
+Use MTScan only on systems you own or have explicit permission to test.
+
+## What It Produces
+
+MTScan now writes one high-level report per saved scan:
+
+```text
+vulnerability_report.md
+```
+
+The report is meant to show, explain, and help fix vulnerabilities. It combines:
+
+- Executive summary
+- Severity counts
+- Priority findings
+- Remediation plan
+- Finding details
+- Exposure context
+- Tool execution notes
+
+Run with `--json-output` when possible so the report can include richer nuclei
+metadata such as descriptions, references, and remediation text.
 
 ## Requirements
 
 - Native Linux VM or host
 - Python 3.8+
 - Internet access for installation, template updates, and public target scans
+- Go, when installing ProjectDiscovery tools from source
 - `naabu`, `httpx`, and `nuclei`
-- Go, if installing the tools from source
 
 ## Install
 
-Run the Linux installer from the project root:
+From the project root:
 
 ```bash
 sudo python3 install/setup.py
 ```
 
-The installer exposes Go-installed tools through `/usr/local/bin` when run with
-`sudo`. If your shell cannot find them, make sure `/usr/local/bin` is in `PATH`:
+The installer exposes Go-installed scanner binaries through `/usr/local/bin`
+when it has sudo privileges. If your shell cannot find the tools after install:
 
 ```bash
-export PATH="$PATH:/usr/local/bin"
+export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
 ```
 
-## Usage
+Detailed setup notes are in [docs/INSTALL.md](docs/INSTALL.md).
 
-Local app:
+## CLI Usage
+
+Complete chain:
 
 ```bash
-python3 src/app_server.py --host 127.0.0.1 --port 8765
+python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
 ```
 
-Open `http://127.0.0.1:8765`. The app runs scans through the shared Python
-runner, not by calling the CLI. It includes live output, scan history, result
-files, and canvas graphs for severity and exposed surface counts. On non-Linux
-development machines, keep Dry run enabled to preview commands.
-
-Interactive menu:
-
-```bash
-python3 mtscan.py
-```
-
-Run one tool:
+Single tool:
 
 ```bash
 python3 src/workflow.py -naabu -host example.com --top-ports 100
 python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect
-python3 src/workflow.py -nuclei -host https://example.com --severity critical,high
+python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --json-output
 ```
 
-Check the Linux scanner environment:
+Dry run without launching scanners:
+
+```bash
+python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output
+```
+
+Check scanner availability:
 
 ```bash
 python3 src/workflow.py --check-tools
 ```
 
-Run the full chain:
+## Interactive Menu
+
+Start the menu:
 
 ```bash
-python3 src/workflow.py --all -host example.com --top-ports 100 --save-output
+python3 mtscan.py
 ```
 
-In the interactive menu, option `[4]` now offers default, fast, stealth, deep,
-and custom per-tool chain configuration before launching the scan.
+Current menu flow:
 
-The full chain runs:
+- `[1]` Complete CLI Scan Chain
+- `[2]` Single Tool CLI Scan
+- `[3]` Launch Local Web App
+- `[4]` View Previous Results
+- `[5]` Update Nuclei Templates
+- `[6]` Tool Configuration
+- `[7]` Install/Update Tools
+- `[8]` Help & Documentation
 
-1. `naabu` against the target.
-2. `httpx` against discovered hosts/ports, or the original target if no ports are saved.
-3. `nuclei` against discovered HTTP URLs, or `http://target` and `https://target` as fallback.
+Usage details are in [docs/USAGE.md](docs/USAGE.md).
 
-## Outputs
+## Local Web App
 
-When `--save-output` or `--all` is used, MTScan creates a `results_*` directory
-with tool output files, `comprehensive_scan_report.txt`, and
-`security_findings_report.md`.
-
-`security_findings_report.md` is generated from saved nuclei output. Use
-`--json-output` when you want richer finding details, references, and
-remediation text in that report.
-
-Useful output flags:
-
-- `--json-output` for JSON/JSONL where supported
-- `-o ./results` to choose an output directory
-- `--tool-silent` to ask tools for quieter output
-
-## Troubleshooting
-
-If tools are not found:
+Start the app on loopback:
 
 ```bash
-which naabu
-which httpx
-which nuclei
-echo "$PATH"
-export PATH="$PATH:$HOME/go/bin"
+python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
 
-If nuclei templates are stale:
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The app uses the shared Python scanner runner. It includes live logs, scan
+history, result summaries, and graphs for findings and exposed surface.
+
+The app is intentionally local-first:
+
+- Binds to `127.0.0.1` by default
+- Refuses non-loopback binds unless `--allow-remote` is passed
+- Restricts Host headers
+- Sends defensive browser headers
+- Redacts local paths and sensitive command values in API payloads
+- Limits request size and retained in-memory logs
+
+## Local History Storage
+
+The web app stores completed scan summaries for graph history. It tries
+Cassandra first and falls back to a local JSONL file if Cassandra is not
+available.
+
+Optional local Cassandra:
 
 ```bash
-python3 src/workflow.py -nuclei -host https://example.com --update-templates
+docker compose -f docker-compose.cassandra.yml up -d
+python3 src/app_server.py
 ```
 
-If scanner binaries are outdated, use menu option `[8]` and choose
-`Update scanner binaries to latest`. The full installer also installs ProjectDiscovery
-tools from `@latest`. Go builds use a disk-backed cache under
-`$GOPATH/mtscan-build` to avoid Kali `/tmp` space issues during nuclei builds.
-Installer retries are timeout-bound and stop the full child process tree before
-moving to the next attempt.
+Storage environment variables:
 
-Quick Linux smoke test without launching scanners:
+- `MTSCAN_STORAGE_BACKEND=auto|cassandra|file|off`
+- `MTSCAN_HISTORY_FILE=data/scan_history.jsonl`
+- `MTSCAN_CASSANDRA_HOSTS=127.0.0.1`
+- `MTSCAN_CASSANDRA_PORT=9042`
+- `MTSCAN_CASSANDRA_KEYSPACE=mtscan`
+- `MTSCAN_CASSANDRA_CONNECT_TIMEOUT=2`
+- `MTSCAN_CASSANDRA_CONTROL_TIMEOUT=2`
+
+## Documentation
+
+- [docs/INSTALL.md](docs/INSTALL.md): installation and setup
+- [docs/USAGE.md](docs/USAGE.md): CLI, menu, web app, reports
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution rules and license terms
+- [SECURITY.md](SECURITY.md): security policy and responsible use
+- [docs/CODE_SCANNING.md](docs/CODE_SCANNING.md): GitHub code scanning pipeline
+- [docs/LICENSING.md](docs/LICENSING.md): project license and third-party notes
+- [licenses/](licenses/): full license texts and third-party notices
+
+## License
+
+MTScan is owned by Lucca Vieira Gentilezza and is open source under a
+multi-license grant: Apache-2.0 OR MIT OR BSD-3-Clause. See [LICENSE](LICENSE),
+[NOTICE](NOTICE), [licenses/](licenses/), and [docs/LICENSING.md](docs/LICENSING.md).
+
+Copyright 2026 Lucca Vieira Gentilezza.
+
+Third-party tools keep their own upstream licenses. Lucca Vieira Gentilezza does
+not claim licensing ownership or relicensing rights over the tools used by this
+project, including `naabu`, `httpx`, `nuclei`, their templates, binaries,
+dependencies, names, logos, or trademarks.
+
+## Português do Brasil
+
+MTScan e um kit de analise de vulnerabilidades focado em Linux que orquestra os
+scanners ProjectDiscovery `naabu`, `httpx` e `nuclei`.
+
+Ele pode ser usado de tres formas:
+
+- Cadeia completa no CLI: `naabu -> httpx -> nuclei`
+- Varredura CLI com uma unica ferramenta: `naabu`, `httpx` ou `nuclei`
+- Aplicacao web local: painel em localhost com saida ao vivo, historico e graficos
+
+Use o MTScan somente em sistemas que voce possui ou tem permissao explicita
+para testar.
+
+## Relatorio Principal
+
+Cada varredura salva gera um unico relatorio humano:
+
+```text
+vulnerability_report.md
+```
+
+Esse relatorio mostra, explica e ajuda a corrigir vulnerabilidades. Ele inclui
+resumo executivo, severidades, achados prioritarios, plano de correcao, detalhes
+dos achados, contexto de exposicao e notas de execucao das ferramentas.
+
+Use `--json-output` sempre que possivel para enriquecer o relatorio com
+descricoes, referencias e remediacoes vindas do nuclei.
+
+## Instalacao
+
+Na raiz do projeto:
 
 ```bash
-python3 src/workflow.py --dry-run --all -host example.com --top-ports 100 --save-output --json-output
+sudo python3 install/setup.py
 ```
 
-If the VM network check fails but you know connectivity is available:
+Se o shell nao encontrar as ferramentas depois da instalacao:
 
 ```bash
-python3 src/workflow.py --skip-network-check -httpx -host example.com
+export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
 ```
 
-Use only targets you own or are explicitly authorized to test.
+Mais detalhes estao em [docs/INSTALL.md](docs/INSTALL.md).
+
+## Uso Rapido
+
+Cadeia completa:
+
+```bash
+python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
+```
+
+Uma ferramenta:
+
+```bash
+python3 src/workflow.py -naabu -host example.com --top-ports 100
+python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect
+python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --json-output
+```
+
+Aplicacao local:
+
+```bash
+python3 src/app_server.py --host 127.0.0.1 --port 8765
+```
+
+Abra `http://127.0.0.1:8765`.
+
+## Armazenamento Local
+
+A aplicacao web guarda resumos de varreduras concluidas para alimentar os
+graficos. Ela tenta usar Cassandra primeiro e volta para `data/scan_history.jsonl`
+se o Cassandra nao estiver disponivel.
+
+Subir Cassandra local:
+
+```bash
+docker compose -f docker-compose.cassandra.yml up -d
+python3 src/app_server.py
+```
+
+## Licenca
+
+MTScan pertence a Lucca Vieira Gentilezza e e open source sob uma concessao
+multi-licenca: Apache-2.0 OR MIT OR BSD-3-Clause. Veja [LICENSE](LICENSE),
+[NOTICE](NOTICE), [licenses/](licenses/) e [docs/LICENSING.md](docs/LICENSING.md).
+
+Copyright 2026 Lucca Vieira Gentilezza.
+
+As ferramentas de terceiros mantem suas proprias licencas upstream. Lucca Vieira
+Gentilezza nao reivindica propriedade de licenca ou direito de relicenciar as
+ferramentas usadas por este projeto, incluindo `naabu`, `httpx`, `nuclei`, seus
+templates, binarios, dependencias, nomes, logos ou marcas.

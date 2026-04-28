@@ -276,7 +276,7 @@ def run(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             **options,
         )
-        report = output_dir / "comprehensive_scan_report.txt" if output_dir else None
+        report = output_dir / tool_runner.REPORT_FILENAME if output_dir else None
         if report and not args.dry_run:
             print(f"Report: {report}")
         return 0 if all(result.success for result in results) else 1

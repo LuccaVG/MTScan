@@ -1,0 +1,19 @@
+MTScan
+Copyright 2026 Lucca Vieira Gentilezza
+
+This product is distributed under a multi-license grant:
+
+- Apache License 2.0
+- MIT License
+- BSD 3-Clause License
+
+See LICENSE and the licenses/ directory.
+
+MTScan orchestrates third-party security tools such as naabu, httpx, and
+nuclei. Lucca Vieira Gentilezza does not claim copyright, licensing ownership,
+trademark ownership, or relicensing rights over those tools, their templates,
+binaries, dependencies, names, logos, or trademarks. They remain owned and
+licensed by their respective upstream projects.
+
+MTScan is intended for authorized security testing, vulnerability analysis, and
+defensive research.

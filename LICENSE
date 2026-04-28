@@ -1,0 +1,29 @@
+MTScan License
+
+Copyright 2026 Lucca Vieira Gentilezza
+License notice date: 2026-04-28
+
+Lucca Vieira Gentilezza is the sole copyright holder for the original MTScan
+project files in this repository, except where a file explicitly states
+otherwise or where third-party software keeps its own upstream license.
+
+MTScan is distributed under a multi-license grant. You may use, copy, modify,
+and distribute the original MTScan project under any one of these OSI-approved
+licenses, at your option:
+
+- Apache License 2.0: licenses/Apache-2.0.txt
+- MIT License: licenses/MIT.txt
+- BSD 3-Clause License: licenses/BSD-3-Clause.txt
+
+SPDX-License-Identifier: Apache-2.0 OR MIT OR BSD-3-Clause
+
+Only the copyright holder can change the licensing terms for future MTScan
+versions. Previously released copies remain available under the license option
+chosen by each recipient.
+
+Lucca Vieira Gentilezza does not claim copyright, licensing ownership,
+trademark ownership, or relicensing rights over third-party tools used by this
+project, including but not limited to `naabu`, `httpx`, `nuclei`, their
+templates, binaries, dependencies, names, logos, or trademarks. Those materials
+remain under their respective upstream owners and licenses. See NOTICE and
+licenses/THIRD-PARTY-NOTICES.md.

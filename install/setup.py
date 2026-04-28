@@ -38,7 +38,13 @@ import ctypes
 import urllib.request
 import signal
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union, cast
+
+SignalValue = Union[int, signal.Signals]
+KillpgFunction = Callable[[int, SignalValue], None]
+_killpg = getattr(os, "killpg", None)
+LINUX_KILLPG = cast(Optional[KillpgFunction], _killpg if callable(_killpg) else None)
+SIGKILL: SignalValue = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 # ANSI Color codes for output
 class Colors:
@@ -159,9 +165,9 @@ def find_scanner_binary(tool: str) -> Optional[str]:
 
 def expose_tool_to_path(tool: str, source_path: str) -> bool:
     """Make a root-installed Go tool available to regular shells via /usr/local/bin."""
+    target_name = "httpx-toolkit" if tool == "httpx" else tool
+    target_path = os.path.join("/usr/local/bin", target_name)
     try:
-        target_name = "httpx-toolkit" if tool == "httpx" else tool
-        target_path = os.path.join("/usr/local/bin", target_name)
         if os.path.abspath(source_path) == os.path.abspath(target_path):
             return True
         if os.path.lexists(target_path):
@@ -386,15 +392,15 @@ def stop_process_tree(process: subprocess.Popen) -> None:
         return
 
     try:
-        if platform.system().lower() == "linux":
-            os.killpg(process.pid, signal.SIGTERM)
+        if platform.system().lower() == "linux" and LINUX_KILLPG is not None:
+            LINUX_KILLPG(process.pid, signal.SIGTERM)
         else:
             process.terminate()
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         try:
-            if platform.system().lower() == "linux":
-                os.killpg(process.pid, signal.SIGKILL)
+            if platform.system().lower() == "linux" and LINUX_KILLPG is not None:
+                LINUX_KILLPG(process.pid, SIGKILL)
             else:
                 process.kill()
             process.wait(timeout=5)

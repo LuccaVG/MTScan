@@ -51,11 +51,18 @@ class ToolRunnerTests(unittest.TestCase):
         with self.assertRaises(tool_runner.ScanInputError):
             tool_runner.validate_scan_request("example.com", {"severity": "urgent"})
 
-    def test_security_findings_report_separates_observations_from_risks(self):
+    def test_default_output_dir_keeps_long_targets_short(self):
+        long_target = "https://" + ("very-long-subdomain." * 40) + "example.com/path"
+        output_dir = tool_runner.default_output_dir(long_target)
+
+        self.assertLessEqual(len(output_dir.name), len("results_") + tool_runner.MAX_OUTPUT_TARGET_SLUG + 1 + 10 + 1 + 15)
+        self.assertNotIn("/", output_dir.name)
+
+    def test_vulnerability_report_separates_observations_from_risks(self):
         output_dir = Path("tests") / "_report_output"
         output_dir.mkdir(exist_ok=True)
         nuclei_file = output_dir / "nuclei_results.txt"
-        report = output_dir / "security_findings_report.md"
+        report = output_dir / tool_runner.REPORT_FILENAME
         nuclei_file.write_text(
             "\n".join(
                 [
@@ -67,7 +74,7 @@ class ToolRunnerTests(unittest.TestCase):
         )
 
         try:
-            tool_runner.write_security_findings_report(
+            tool_runner.write_vulnerability_report(
                 output_dir,
                 "127.0.0.1",
                 [
@@ -88,10 +95,50 @@ class ToolRunnerTests(unittest.TestCase):
             except OSError:
                 pass
 
-        self.assertIn("- Total security findings: 1", text)
-        self.assertIn("- Informational observations: 1", text)
+        self.assertIn("| Security findings | 1 |", text)
+        self.assertIn("| Informational observations | 1 |", text)
         self.assertIn("exposed-panel", text)
-        self.assertNotIn("| INFO |", text)
+        self.assertIn("## Informational Observations", text)
+        self.assertIn("| INFO | tech-detect |", text)
+
+    def test_report_redacts_sensitive_command_values(self):
+        output_dir = Path("tests") / "_redacted_report_output"
+        output_dir.mkdir(exist_ok=True)
+        report = output_dir / tool_runner.REPORT_FILENAME
+
+        try:
+            tool_runner.write_vulnerability_report(
+                output_dir,
+                "127.0.0.1",
+                [
+                    tool_runner.ToolResult(
+                        tool="httpx",
+                        command=[
+                            "/usr/local/bin/httpx",
+                            "-u",
+                            "https://example.com",
+                            "-H",
+                            "Authorization: Bearer secret-token",
+                            "-o",
+                            str(output_dir / "httpx_results.txt"),
+                        ],
+                        success=True,
+                        output_file=output_dir / "httpx_results.txt",
+                    )
+                ],
+            )
+            text = report.read_text(encoding="utf-8")
+        finally:
+            report.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertIn("-H [redacted]", text)
+        self.assertIn("[redacted]", text)
+        self.assertNotIn("secret-token", text)
+        self.assertNotIn(str(output_dir), text)
 
     def test_run_chain_falls_back_to_original_target_when_naabu_has_no_targets(self):
         calls = []
@@ -112,8 +159,7 @@ class ToolRunnerTests(unittest.TestCase):
         created_files = [
             output_dir / "nuclei_targets.txt",
             output_dir / "nuclei_results.txt",
-            output_dir / "comprehensive_scan_report.txt",
-            output_dir / "security_findings_report.md",
+            output_dir / tool_runner.REPORT_FILENAME,
         ]
         output_dir.mkdir(exist_ok=True)
         for path in created_files:

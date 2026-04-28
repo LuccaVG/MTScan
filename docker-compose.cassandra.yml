@@ -1,0 +1,21 @@
+services:
+  cassandra:
+    image: cassandra:4.1
+    container_name: mtscan-cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: mtscan-local
+      CASSANDRA_NUM_TOKENS: 16
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - mtscan-cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' 127.0.0.1 9042"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+
+volumes:
+  mtscan-cassandra-data:

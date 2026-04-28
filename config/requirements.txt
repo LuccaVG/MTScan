@@ -7,6 +7,9 @@ markdown==3.4.3
 jinja2==3.1.2
 rich==13.3.5
 
+# Optional durable graph storage
+cassandra-driver>=3.29,<4
+
 # Progress and formatting
 tqdm==4.65.0
 

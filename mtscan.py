@@ -209,7 +209,7 @@ def print_tools_status():
     else:
         missing_tools = [tool for tool, info in status.items() if not info['installed']]
         print(f"\n[WARNING] Missing tools: {', '.join(missing_tools)}")
-        print(f"[ACTION]  Run option [8] to install or update tools")
+        print(f"[ACTION]  Run option [7] to install or update tools")
         print(f"[PATH]    Ensure /usr/local/bin is in PATH: export PATH=$PATH:/usr/local/bin")
     
     print()
@@ -218,33 +218,30 @@ def print_main_menu():
     """Print enhanced main menu with better formatting."""
     print("SCAN OPERATIONS:")
     print("=" * 60)
-    print("  [1] Port Discovery Scan      (naabu)")
-    print("      Fast port enumeration and service detection")
-    print()
-    print("  [2] HTTP Service Analysis    (httpx)")
-    print("      Web service discovery and technology detection")
-    print()
-    print("  [3] Vulnerability Assessment (nuclei)")
-    print("      Security vulnerability scanning with 5000+ templates")
-    print()
-    print("  [4] Complete Scan Chain       (naabu -> httpx -> nuclei)")
+    print("  [1] Complete CLI Scan Chain   (naabu -> httpx -> nuclei)")
     print("      Run port discovery, service analysis, and vulnerability checks")
+    print()
+    print("  [2] Single Tool CLI Scan")
+    print("      Choose naabu, httpx, or nuclei from a submenu")
+    print()
+    print("  [3] Launch Local Web App")
+    print("      Start the browser-based dashboard on localhost")
     print()
     print("MANAGEMENT OPERATIONS:")
     print("=" * 60)
-    print("  [5] View Previous Results")
+    print("  [4] View Previous Results")
     print("      Browse and analyze past scan results")
     print()
-    print("  [6] Update Nuclei Templates")
+    print("  [5] Update Nuclei Templates")
     print("      Download latest vulnerability templates")
     print()
-    print("  [7] Tool Configuration")
+    print("  [6] Tool Configuration")
     print("      Configure scanning parameters and settings")
     print()
-    print("  [8] Install/Update Tools")
+    print("  [7] Install/Update Tools")
     print("      Install or update security scanning tools")
     print()
-    print("  [9] Help & Documentation")
+    print("  [8] Help & Documentation")
     print("      View usage guides and tool documentation")
     print()
     print("  [0] Exit Program")
@@ -787,13 +784,24 @@ def run_scan(scan_type, target, **kwargs):
                     print(f"[DIRECTORY] {latest_dir}")
                     
                     # List key files
-                    for filename in ['comprehensive_scan_report.txt', 'security_findings_report.md', 'naabu_results.txt', 'httpx_results.txt', 'nuclei_results.txt']:
+                    for filename in [
+                        'vulnerability_report.md',
+                        'naabu_results.txt',
+                        'naabu_results.json',
+                        'naabu_results.csv',
+                        'httpx_results.txt',
+                        'httpx_results.json',
+                        'httpx_results.csv',
+                        'nuclei_results.txt',
+                        'nuclei_results.jsonl',
+                        'nuclei_results.csv',
+                    ]:
                         filepath = os.path.join(latest_dir, filename)
                         if os.path.exists(filepath):
                             file_size = os.path.getsize(filepath)
                             print(f"[FILE] {filename} ({file_size:,} bytes)")
                     
-                    print(f"[ACCESS] Use menu option [5] to view detailed results")
+                    print(f"[ACCESS] Use menu option [4] to view detailed results")
             except OSError as e:
                 print(f"[ERROR] Could not access results directory: {e}")
         else:
@@ -896,24 +904,34 @@ def view_result_details(result_dir):
     print(f"SCAN RESULTS: {result_dir}")
     print("=" * 60)
     
-    # Look for generated report files
+    # Look for the generated report file. Older result folders may still have
+    # the previous split reports, so keep a read-only fallback.
+    vulnerability_report = os.path.join(result_dir, "vulnerability_report.md")
     comprehensive_report = os.path.join(result_dir, "comprehensive_scan_report.txt")
     findings_report = os.path.join(result_dir, "security_findings_report.md")
     
     try:
-        if os.path.exists(findings_report):
-            print("SECURITY FINDINGS REPORT:")
+        if os.path.exists(vulnerability_report):
+            print("VULNERABILITY REPORT:")
             print("-" * 40)
-            with open(findings_report, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(vulnerability_report, 'r', encoding='utf-8', errors='ignore') as f:
                 print(f.read())
             print()
-
-        if os.path.exists(comprehensive_report):
+        elif os.path.exists(comprehensive_report) or os.path.exists(findings_report):
+            if os.path.exists(findings_report):
+                print("SECURITY FINDINGS REPORT:")
+                print("-" * 40)
+                with open(findings_report, 'r', encoding='utf-8', errors='ignore') as f:
+                    print(f.read())
+                print()
             print("COMPREHENSIVE SCAN REPORT:")
             print("-" * 40)
-            with open(comprehensive_report, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                print(content)
+            if os.path.exists(comprehensive_report):
+                with open(comprehensive_report, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    print(content)
+            else:
+                print("Older scan has no comprehensive report file.")
         else:
             # Fallback: show directory contents if comprehensive report not found
             print("Directory contents:")
@@ -926,7 +944,7 @@ def view_result_details(result_dir):
                 elif os.path.isdir(file_path):
                     print(f"    {file}/")
             
-            print("\nNote: No comprehensive_scan_report.txt found.")
+            print("\nNote: No vulnerability_report.md found.")
             print("This might be an older scan result or incomplete scan.")
         
     except Exception as e:
@@ -971,34 +989,37 @@ def show_help():
     print("=" * 50)
     print()
     print("TOOL DESCRIPTIONS:")
-    print("  • naabu   - Fast port scanner for network reconnaissance")
-    print("  • httpx   - HTTP toolkit for service discovery and analysis")
-    print("  • nuclei  - Vulnerability scanner with 5000+ templates")
+    print("  - naabu   - Fast port scanner for network reconnaissance")
+    print("  - httpx   - HTTP toolkit for service discovery and analysis")
+    print("  - nuclei  - Vulnerability scanner with templates")
     print()
     print("SCAN TYPES:")
-    print("  • Port Scan      - Discover open ports on target")
-    print("  • HTTP Detection - Find HTTP services and gather info")
-    print("  • Vuln Scan      - Check for known vulnerabilities")
+    print("  - Complete Chain  - naabu -> httpx -> nuclei")
+    print("  - Single Tool     - Choose naabu, httpx, or nuclei")
+    print("  - Local Web App   - Dashboard, scan history, and graphs")
     print()
     print("OPTIONS:")
-    print("  • Stealth Mode   - Slower, more discreet scanning")
-    print("  • Save Output    - Save results to files")
-    print("  • JSON Output    - Machine-readable output format")
+    print("  - Stealth Mode    - Slower, lower-rate scanning")
+    print("  - Save Output     - Save raw output and vulnerability_report.md")
+    print("  - JSON Output     - Machine-readable output and richer report metadata")
     print()
     print("DOCUMENTATION:")
-    print("  • README.md      - General overview and quick start")
-    print("  • docs/USAGE.md  - Detailed usage examples")
-    print("  • docs/INSTALL.md - Installation instructions")
+    print("  - README.md       - General overview and quick start")
+    print("  - docs/USAGE.md   - Detailed usage examples")
+    print("  - docs/INSTALL.md - Installation instructions")
+    print("  - docs/LICENSING.md - Licensing and third-party notes")
+    print("  - SECURITY.md     - Responsible use and vulnerability reporting")
     print()
     print("GETTING STARTED:")
-    print("  • Run: python mtscan.py")
-    print("  • Or: python src/workflow.py --all -host <target>")
+    print("  - Menu: python mtscan.py")
+    print("  - Complete CLI chain: python src/workflow.py --all -host <target>")
+    print("  - Web app: python src/app_server.py --host 127.0.0.1 --port 8765")
     print()
     print("EXAMPLES:")
     print("  Target formats:")
-    print("    • 192.168.1.100")
-    print("    • example.com")
-    print("    • https://target.com")
+    print("    - 192.168.1.100")
+    print("    - example.com")
+    print("    - https://target.com")
     print()
     
     input("Press Enter to continue...")
@@ -2059,6 +2080,96 @@ def show_scan_type_help(scan_type):
     
     print("="*60)
 
+def single_tool_scan_menu():
+    """Choose and run one scanner from the CLI menu."""
+    while True:
+        clear_screen()
+        print_banner()
+        print("SINGLE TOOL CLI SCAN:")
+        print("=" * 60)
+        print("  [1] Port Discovery Scan      (naabu)")
+        print("      Fast port enumeration and service detection")
+        print()
+        print("  [2] HTTP Service Analysis    (httpx)")
+        print("      Web service discovery and technology detection")
+        print()
+        print("  [3] Vulnerability Assessment (nuclei)")
+        print("      Security vulnerability scanning with nuclei templates")
+        print()
+        print("  [0] Back to main menu")
+        print("=" * 60)
+
+        choice = input("Select scanner [0-3]: ").strip()
+        if choice == "0":
+            return
+
+        tool_by_choice = {
+            "1": "naabu",
+            "2": "httpx",
+            "3": "nuclei",
+        }
+        scan_type = tool_by_choice.get(choice)
+        if not scan_type:
+            print("Invalid option. Please select 0-3.")
+            input("Press Enter to continue...")
+            continue
+
+        target = get_target_input()
+        if target:
+            run_scan(scan_type, target)
+        return
+
+
+def launch_web_app():
+    """Launch the local MTScan web app from the interactive menu."""
+    clear_screen()
+    print_banner()
+    print("LOCAL WEB APP:")
+    print("=" * 60)
+    print("The app will run on localhost and use the same scanner workflow.")
+    print("Keep this terminal open while using the app.")
+    print()
+
+    host = "127.0.0.1"
+    port_text = input("Port [8765]: ").strip() or "8765"
+    try:
+        port = int(port_text)
+        if port < 1 or port > 65535:
+            raise ValueError
+    except ValueError:
+        print("Invalid port. Please enter a number between 1 and 65535.")
+        input("Press Enter to continue...")
+        return
+
+    cmd = [sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port)]
+    url = f"http://{host}:{port}"
+    print()
+    print(f"[APP] Starting MTScan web app at {url}")
+    print("[APP] Press Ctrl+C to stop the app and return to the menu.")
+    print("=" * 60)
+
+    process = None
+    try:
+        process = subprocess.Popen(cmd, cwd=os.getcwd())
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"\n[APP] Web app exited with code {return_code}")
+    except KeyboardInterrupt:
+        print("\n[APP] Stopping web app...")
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+    except FileNotFoundError:
+        print("[ERROR] Could not find src/app_server.py from the project root.")
+    except Exception as exc:
+        print(f"[ERROR] Could not start web app: {exc}")
+
+    input("\nPress Enter to return to main menu...")
+
+
 def main():
     """Main menu loop."""
     while True:
@@ -2067,45 +2178,34 @@ def main():
         print_tools_status()
         print_main_menu()
         
-        choice = input("Select option [0-9]: ").strip()
+        choice = input("Select option [0-8]: ").strip()
         
         if choice == "0":
             print("\nGoodbye!")
             break
         elif choice == "1":
-            # Port Scan (naabu)
-            target = get_target_input()
-            if target:
-                run_scan("naabu", target)
-        elif choice == "2":
-            # HTTP Service Detection (httpx)
-            target = get_target_input()
-            if target:
-                run_scan("httpx", target)
-        elif choice == "3":
-            # Vulnerability Scan (nuclei)
-            target = get_target_input()
-            if target:
-                run_scan("nuclei", target)
-        elif choice == "4":
             # Complete scan chain
             target = get_target_input()
             if target:
                 run_scan("all", target)
-        elif choice == "5":
+        elif choice == "2":
+            single_tool_scan_menu()
+        elif choice == "3":
+            launch_web_app()
+        elif choice == "4":
             view_results()
-        elif choice == "6":
+        elif choice == "5":
             update_templates()
-        elif choice == "7":
+        elif choice == "6":
             print("\nTool Configuration")
             print("Configuration options will be available in future updates.")
             input("Press Enter to continue...")
-        elif choice == "8":
+        elif choice == "7":
             install_tools()
-        elif choice == "9":
+        elif choice == "8":
             show_help()
         else:
-            print("Invalid option. Please select 0-9.")
+            print("Invalid option. Please select 0-8.")
             input("Press Enter to continue...")
 
 if __name__ == "__main__":

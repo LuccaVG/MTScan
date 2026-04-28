@@ -146,6 +146,7 @@ nuclei_output*
 *.txt
 !requirements.txt
 !README.txt
+!licenses/*.txt
 
 # System files
 .DS_Store

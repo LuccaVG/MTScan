@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import csv
+import hashlib
 import json
 import os
 import platform
@@ -24,13 +25,32 @@ import threading
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, cast
 
 
 SECURITY_TOOLS = ("naabu", "httpx", "nuclei")
+REPORT_FILENAME = "vulnerability_report.md"
 NUCLEI_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info", "unknown"}
 SECURITY_FINDING_SEVERITIES = {"critical", "high", "medium", "low"}
+SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
+SENSITIVE_COMMAND_VALUE_FLAGS = {
+    "-H",
+    "--headers",
+    "--custom-headers",
+    "--proxy",
+    "--interactsh-token",
+    "--vars",
+}
+PATH_COMMAND_VALUE_FLAGS = {
+    "-o",
+    "-l",
+    "-t",
+    "--template-path",
+    "--markdown-export",
+    "--sarif-export",
+    "--store-resp-dir",
+}
 NUCLEI_TEXT_FINDING_PATTERN = re.compile(
     r"^\[(?P<template>[^\]]+)\]\s+\[[^\]]+\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<matched>\S+)"
 )
@@ -53,6 +73,7 @@ POSITIVE_INTEGER_OPTIONS: Dict[str, Tuple[int, int]] = {
     "max_redirects": (0, 100),
     "timeout": (1, 604800),
 }
+MAX_OUTPUT_TARGET_SLUG = 80
 
 
 class ScanInputError(ValueError):
@@ -81,7 +102,10 @@ def project_root() -> Path:
 
 def default_output_dir(target: str) -> Path:
     timestamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_target = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in target)
+    safe_target = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in target).strip("._") or "target"
+    if len(safe_target) > MAX_OUTPUT_TARGET_SLUG:
+        digest = hashlib.sha1(target.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        safe_target = f"{safe_target[:MAX_OUTPUT_TARGET_SLUG]}_{digest}"
     return project_root() / f"results_{safe_target}_{timestamp}"
 
 
@@ -396,6 +420,44 @@ def _append_bool(cmd: List[str], flag: str, enabled: bool) -> None:
         cmd.append(flag)
 
 
+def _public_path_value(value: object) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if "\\" in text:
+        return PureWindowsPath(text).name or "[path]"
+    return Path(text).name or "[path]"
+
+
+def redact_command(command: Sequence[object]) -> List[str]:
+    """Return a command preview safe for reports and API responses."""
+    values = [str(part) for part in command]
+    redacted: List[str] = []
+    redact_next = False
+    path_next = False
+
+    for index, value in enumerate(values):
+        if index == 0:
+            redacted.append(_public_path_value(value) or value)
+            continue
+        if redact_next:
+            redacted.append("[redacted]")
+            redact_next = False
+            continue
+        if path_next:
+            redacted.append(_public_path_value(value) or "[path]")
+            path_next = False
+            continue
+
+        redacted.append(value)
+        if value in SENSITIVE_COMMAND_VALUE_FLAGS:
+            redact_next = True
+        elif value in PATH_COMMAND_VALUE_FLAGS:
+            path_next = True
+
+    return redacted
+
+
 def build_naabu_command(
     target: Optional[str] = None,
     target_list: Optional[str] = None,
@@ -647,7 +709,7 @@ def run_command(
 ) -> ToolResult:
     cmd = [str(part) for part in command]
     if dry_run:
-        line = f"[DRY-RUN] {' '.join(cmd)}"
+        line = f"[DRY-RUN] {' '.join(redact_command(cmd))}"
         if on_line:
             on_line(line)
         else:
@@ -992,6 +1054,76 @@ def _severity_counts(findings: Sequence[Dict[str, object]]) -> Dict[str, int]:
     return counts
 
 
+def _sorted_findings(findings: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
+    return sorted(
+        findings,
+        key=lambda item: (
+            SEVERITY_RANK.get(str(item.get("severity") or "unknown").lower(), 5),
+            str(item.get("name") or ""),
+            str(item.get("matched_at") or ""),
+        ),
+    )
+
+
+def _overall_risk_label(counts: Dict[str, int]) -> str:
+    if counts.get("critical", 0):
+        return "Critical"
+    if counts.get("high", 0):
+        return "High"
+    if counts.get("medium", 0):
+        return "Medium"
+    if counts.get("low", 0):
+        return "Low"
+    return "No confirmed security findings"
+
+
+def _risk_explanation(counts: Dict[str, int]) -> str:
+    if counts.get("critical", 0):
+        return "Critical findings should be treated as urgent because they commonly indicate direct compromise paths or severe exposure."
+    if counts.get("high", 0):
+        return "High findings should be prioritized next because they often expose sensitive functionality or practical attack paths."
+    if counts.get("medium", 0):
+        return "Medium findings deserve planned remediation because they can become serious when chained with other weaknesses."
+    if counts.get("low", 0):
+        return "Low findings are still worth cleaning up, especially on internet-facing assets."
+    return "No critical, high, medium, or low nuclei findings were parsed from the saved scanner output."
+
+
+def _safe_list(value: object) -> List[object]:
+    return cast(List[object], value) if isinstance(value, list) else []
+
+
+def _finding_fix_guidance(finding: Dict[str, object]) -> List[str]:
+    severity = str(finding.get("severity") or "unknown").lower()
+    name = str(finding.get("name") or "").lower()
+    tags = " ".join(str(item).lower() for item in _safe_list(finding.get("tags")))
+    cve = finding.get("cve")
+    guidance: List[str] = []
+
+    remediation = _markdown_cell(finding.get("remediation"))
+    if remediation:
+        guidance.append(remediation)
+
+    if cve:
+        guidance.append("Check the vendor advisory for the listed CVE and upgrade or backport the fixed package version.")
+    if any(token in name or token in tags for token in ("exposure", "panel", "dashboard", "admin", "debug")):
+        guidance.append("Remove public access if it is not required, add authentication, and restrict access by network policy.")
+    if any(token in name or token in tags for token in ("default-login", "credential", "password", "auth")):
+        guidance.append("Rotate affected credentials and disable default or shared accounts.")
+    if any(token in name or token in tags for token in ("xss", "sqli", "rce", "ssrf", "lfi", "rfi", "xxe")):
+        guidance.append("Patch the vulnerable application component, then add input validation and server-side controls for the affected route.")
+    if severity in {"critical", "high"}:
+        guidance.append("After the fix, re-run the same nuclei template against the affected target before closing the item.")
+    elif not guidance:
+        guidance.append("Validate the affected service, apply the safest vendor-supported fix, and re-run the scan to confirm closure.")
+
+    deduped: List[str] = []
+    for item in guidance:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[str, object]:
     """Build app-friendly counts and result metadata from scanner outputs."""
     by_tool = {result.tool: result for result in results}
@@ -1046,116 +1178,231 @@ def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[s
     }
 
 
-def write_security_findings_report(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
+def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
+    """Write one high-level, remediation-focused report for a scan."""
+    ensure_output_dir(output_dir)
+    summary = summarize_scan_results(target, results)
     nuclei_output = next((result.output_file for result in results if result.tool == "nuclei" and result.output_file), None)
-    parsed_findings = parse_nuclei_findings(nuclei_output)
-    findings = [
-        finding for finding in parsed_findings
-        if str(finding.get("severity") or "").lower() in SECURITY_FINDING_SEVERITIES
-    ]
-    observations = [
-        finding for finding in parsed_findings
-        if str(finding.get("severity") or "").lower() not in SECURITY_FINDING_SEVERITIES
-    ]
-    counts = _severity_counts(findings)
-    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
-    sorted_findings = sorted(findings, key=lambda item: severity_rank.get(str(item.get("severity")), 5))
+    all_findings = parse_nuclei_findings(nuclei_output) or cast(List[Dict[str, object]], summary.get("findings") or [])
+    findings = _sorted_findings(
+        [
+            finding for finding in all_findings
+            if str(finding.get("severity") or "").lower() in SECURITY_FINDING_SEVERITIES
+        ]
+    )
+    observations = _sorted_findings(
+        [
+            finding for finding in all_findings
+            if str(finding.get("severity") or "").lower() not in SECURITY_FINDING_SEVERITIES
+        ]
+    )
+    severity_counts = cast(Dict[str, int], summary.get("severity_counts") or _severity_counts(all_findings))
+    risk_label = _overall_risk_label(severity_counts)
+    generated_at = _dt.datetime.now().isoformat(timespec="seconds")
+    report = output_dir / REPORT_FILENAME
 
-    report = output_dir / "security_findings_report.md"
     lines = [
-        "# Security Findings and Remediation",
+        "# MTScan Vulnerability Report",
         "",
-        f"Target: {target}",
-        f"Generated: {_dt.datetime.now().isoformat(timespec='seconds')}",
+        f"Target: `{target}`",
+        f"Generated: `{generated_at}`",
+        f"Overall risk: **{risk_label}**",
         "",
-        "## Summary",
+        "## Executive Summary",
         "",
-        f"- Total security findings: {len(findings)}",
-        f"- Critical: {counts['critical']}",
-        f"- High: {counts['high']}",
-        f"- Medium: {counts['medium']}",
-        f"- Low: {counts['low']}",
-        f"- Informational observations: {len(observations)}",
+        _risk_explanation(severity_counts),
+        "",
+        "| Metric | Count |",
+        "|---|---:|",
+        f"| Open ports | {summary.get('open_ports', 0)} |",
+        f"| HTTP services | {summary.get('http_services', 0)} |",
+        f"| Security findings | {summary.get('security_findings', 0)} |",
+        f"| Informational observations | {summary.get('observations', 0)} |",
+        "",
+        "| Severity | Count |",
+        "|---|---:|",
+        f"| Critical | {severity_counts.get('critical', 0)} |",
+        f"| High | {severity_counts.get('high', 0)} |",
+        f"| Medium | {severity_counts.get('medium', 0)} |",
+        f"| Low | {severity_counts.get('low', 0)} |",
+        f"| Info | {severity_counts.get('info', 0)} |",
+        "",
+        "## What Was Checked",
+        "",
+        "- `naabu` discovered exposed TCP services.",
+        "- `httpx` identified reachable HTTP and HTTPS services and collected web context.",
+        "- `nuclei` checked discovered HTTP targets for known vulnerabilities, exposures, and misconfigurations.",
         "",
     ]
 
-    if not findings:
+    if findings:
         lines.extend(
             [
-                "No nuclei security findings were parsed from the saved output.",
+                "## Priority Findings",
                 "",
-                "If you expected findings, re-run the scan with `--json-output` so the report can include template descriptions, references, and remediation text.",
+                "| Priority | Severity | Finding | Affected target | Template | CVE |",
+                "|---:|---|---|---|---|---|",
+            ]
+        )
+        for index, finding in enumerate(findings[:20], 1):
+            lines.append(
+                "| {index} | {severity} | {name} | {matched} | {template} | {cve} |".format(
+                    index=index,
+                    severity=_markdown_cell(finding.get("severity")).upper(),
+                    name=_markdown_cell(finding.get("name")),
+                    matched=_markdown_cell(finding.get("matched_at")),
+                    template=_markdown_cell(finding.get("template_id")),
+                    cve=_markdown_cell(finding.get("cve") or "N/A"),
+                )
+            )
+        if len(findings) > 20:
+            lines.append(f"| ... | ... | {len(findings) - 20} additional findings | ... | ... | ... |")
+        lines.append("")
+    else:
+        lines.extend(
+            [
+                "## Priority Findings",
+                "",
+                "No confirmed critical, high, medium, or low nuclei findings were parsed from the saved output.",
+                "",
+            ]
+        )
+
+    lines.extend(["## Remediation Plan", ""])
+    if findings:
+        lines.extend(
+            [
+                "1. Fix critical and high findings first, starting with internet-facing services.",
+                "2. Patch vulnerable software or apply the vendor-supported configuration change for each affected service.",
+                "3. Reduce exposure while fixes are being prepared: remove unused services, restrict management panels, and require authentication.",
+                "4. Re-run the same scan profile and confirm the finding no longer appears before closing the issue.",
                 "",
             ]
         )
     else:
         lines.extend(
             [
-                "## Findings",
+                "1. Review the exposed ports and HTTP services below to confirm they are expected.",
+                "2. Re-run with `--json-output` if you need richer nuclei descriptions and remediation metadata.",
+                "3. Keep nuclei templates updated and rescan after major deployments or configuration changes.",
                 "",
-                "| Severity | Finding | Template | Affected Target | CVE |",
-                "|---|---|---|---|---|",
             ]
         )
-        for finding in sorted_findings:
-            lines.append(
-                "| {severity} | {name} | {template} | {matched} | {cve} |".format(
-                    severity=_markdown_cell(finding.get("severity")).upper(),
-                    name=_markdown_cell(finding.get("name")),
-                    template=_markdown_cell(finding.get("template_id")),
-                    matched=_markdown_cell(finding.get("matched_at")),
-                    cve=_markdown_cell(finding.get("cve") or "N/A"),
-                )
-            )
 
-        lines.extend(["", "## Remediation Details", ""])
-        for index, finding in enumerate(sorted_findings, 1):
-            raw_references = finding.get("references")
-            references = cast(List[object], raw_references) if isinstance(raw_references, list) else []
+    if findings:
+        lines.extend(["## Finding Details", ""])
+        for index, finding in enumerate(findings, 1):
+            references = _safe_list(finding.get("references"))
             lines.extend(
                 [
                     f"### {index}. {_markdown_cell(finding.get('name'))}",
                     "",
                     f"- Severity: {_markdown_cell(finding.get('severity')).upper()}",
-                    f"- Template: {_markdown_cell(finding.get('template_id'))}",
-                    f"- Affected target: {_markdown_cell(finding.get('matched_at'))}",
-                    f"- Description: {_markdown_cell(finding.get('description'))}",
-                    f"- Recommended fix: {_markdown_cell(finding.get('remediation'))}",
+                    f"- Affected target: `{_markdown_cell(finding.get('matched_at'))}`",
+                    f"- Template: `{_markdown_cell(finding.get('template_id'))}`",
+                    f"- CVE: {_markdown_cell(finding.get('cve') or 'N/A')}",
+                    f"- What it means: {_markdown_cell(finding.get('description'))}",
+                    "",
+                    "Recommended fix:",
                 ]
             )
+            for step in _finding_fix_guidance(finding):
+                lines.append(f"- {step}")
             if references:
-                lines.append("- References: " + ", ".join(_markdown_cell(ref) for ref in references[:5]))
+                lines.append("")
+                lines.append("References:")
+                for reference in references[:5]:
+                    lines.append(f"- {_markdown_cell(reference)}")
             lines.append("")
 
-    report.write_text("\n".join(lines), encoding="utf-8")
+    if observations:
+        lines.extend(
+            [
+                "## Informational Observations",
+                "",
+                "These items are not counted as security risks, but they can help with validation and hardening.",
+                "",
+                "| Severity | Observation | Target | Template |",
+                "|---|---|---|---|",
+            ]
+        )
+        for observation in observations[:20]:
+            lines.append(
+                "| {severity} | {name} | {matched} | {template} |".format(
+                    severity=_markdown_cell(observation.get("severity")).upper(),
+                    name=_markdown_cell(observation.get("name")),
+                    matched=_markdown_cell(observation.get("matched_at")),
+                    template=_markdown_cell(observation.get("template_id")),
+                )
+            )
+        lines.append("")
+
+    open_ports = cast(List[object], summary.get("open_port_targets") or [])
+    http_urls = cast(List[object], summary.get("http_urls") or [])
+    lines.extend(["## Exposure Context", ""])
+    if open_ports:
+        lines.append("Open ports discovered:")
+        for item in open_ports[:50]:
+            lines.append(f"- `{_markdown_cell(item)}`")
+        if len(open_ports) > 50:
+            lines.append(f"- ... {len(open_ports) - 50} more")
+        lines.append("")
+    else:
+        lines.append("No open ports were parsed from the saved naabu output.")
+        lines.append("")
+
+    if http_urls:
+        lines.append("HTTP services discovered:")
+        for item in http_urls[:50]:
+            lines.append(f"- `{_markdown_cell(item)}`")
+        if len(http_urls) > 50:
+            lines.append(f"- ... {len(http_urls) - 50} more")
+        lines.append("")
+    else:
+        lines.append("No HTTP services were parsed from the saved httpx output.")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Tool Execution",
+            "",
+            "| Tool | Status | Output file | Notes |",
+            "|---|---|---|---|",
+        ]
+    )
+    for result in results:
+        status = "success" if result.success else "failed"
+        output_file = _markdown_cell(_public_path_value(result.output_file) or "N/A")
+        note = _markdown_cell(result.error or f"{len(result.output_lines)} streamed lines")
+        lines.append(f"| `{result.tool}` | {status} | `{output_file}` | {note} |")
+
+    lines.extend(["", "## Commands", ""])
+    for result in results:
+        if not result.command:
+            continue
+        lines.extend(
+            [
+                f"### {result.tool}",
+                "",
+                "```text",
+                " ".join(redact_command(result.command)),
+                "```",
+                "",
+            ]
+        )
+
+    report.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return report
+
+
+def write_security_findings_report(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
+    """Compatibility wrapper for older callers; writes the single report."""
+    return write_vulnerability_report(output_dir, target, results)
 
 
 def write_summary(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
-    report = output_dir / "comprehensive_scan_report.txt"
-    findings_report = write_security_findings_report(output_dir, target, results)
-    lines = [
-        "MTScan Comprehensive Scan Report",
-        "=" * 80,
-        f"Target: {target}",
-        f"Generated: {_dt.datetime.now().isoformat(timespec='seconds')}",
-        "",
-        "Tool Results",
-        "-" * 80,
-    ]
-    lines.append(f"Security findings report: {findings_report}")
-    lines.append("")
-    for result in results:
-        status = "SUCCESS" if result.success else "FAILED"
-        lines.append(f"{result.tool}: {status}")
-        lines.append(f"Command: {' '.join(result.command)}")
-        if result.output_file:
-            lines.append(f"Output file: {result.output_file}")
-        if result.error:
-            lines.append(f"Error: {result.error}")
-        lines.append("")
-    report.write_text("\n".join(lines), encoding="utf-8")
-    return report
+    """Compatibility wrapper for older callers; writes the single report."""
+    return write_vulnerability_report(output_dir, target, results)
 
 
 def target_urls_for_nuclei(target: str) -> List[str]:
