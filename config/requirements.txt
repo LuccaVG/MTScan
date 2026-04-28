@@ -14,7 +14,7 @@ cassandra-driver>=3.29,<4
 tqdm==4.65.0
 
 # JSON processing
-jsonschema==4.19.0
+jsonschema==4.26.0
 
 # YAML processing
 pyyaml==6.0.1
