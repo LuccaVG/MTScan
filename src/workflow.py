@@ -248,13 +248,18 @@ def run(args: argparse.Namespace) -> int:
         print("No tool selected. Use -naabu, -httpx, -nuclei, or --all.")
         return 1
 
+    options = args_to_options(args)
+    try:
+        target = tool_runner.validate_scan_request(target, options)
+    except tool_runner.ScanInputError as exc:
+        print(f"Invalid scan request: {exc}")
+        return 2
+
     output_dir = Path(args.output_dir).resolve() if args.output_dir else None
     if args.save_output or args.all_tools:
         output_dir = output_dir or tool_runner.default_output_dir(target)
         if not args.dry_run:
             output_dir = tool_runner.ensure_output_dir(output_dir)
-
-    options = args_to_options(args)
 
     print(f"Target: {target}")
     print(f"Tools: {', '.join(tools)}")

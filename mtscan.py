@@ -18,6 +18,23 @@ import threading
 import signal
 import time
 from pathlib import Path
+from typing import Callable, Optional, Union, cast
+
+FindingLinePredicate = Callable[[str], bool]
+SignalValue = Union[int, signal.Signals]
+KillpgFunction = Callable[[int, SignalValue], None]
+
+_killpg = getattr(os, "killpg", None)
+_linux_killpg = cast(Optional[KillpgFunction], _killpg if callable(_killpg) else None)
+
+
+def kill_process_group(pid: int, sig: SignalValue) -> None:
+    if _linux_killpg is None:
+        raise RuntimeError("process groups are only supported on Linux")
+
+    _linux_killpg(pid, sig)
+
+SIGKILL: SignalValue = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -39,13 +56,19 @@ except ImportError:
         return None
 
 try:
-    from src.tool_runner import is_informational_finding_line, is_security_finding_line
+    from src.tool_runner import (
+        is_informational_finding_line as _is_informational_finding_line,
+        is_security_finding_line as _is_security_finding_line,
+    )
 except ImportError:
-    def is_security_finding_line(line):
+    def _is_security_finding_line(line: str) -> bool:
         return False
 
-    def is_informational_finding_line(line):
+    def _is_informational_finding_line(line: str) -> bool:
         return False
+
+is_security_finding_line: FindingLinePredicate = _is_security_finding_line
+is_informational_finding_line: FindingLinePredicate = _is_informational_finding_line
 
 # Ensure we're running on Linux
 if platform.system().lower() != "linux":
@@ -458,7 +481,7 @@ def run_scan(scan_type, target, **kwargs):
         return False
     
     # Build command
-    cmd = [sys.executable, "src/workflow.py"]
+    cmd = [sys.executable, "-u", "src/workflow.py"]
     
     # Add tool-specific flag
     if scan_type == "naabu":
@@ -668,7 +691,9 @@ def run_scan(scan_type, target, **kwargs):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            bufsize=1        )
+            bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
         
         # Variables to track scan progress
         output_lines = []
@@ -1024,17 +1049,11 @@ def stop_process_tree(process):
         return
 
     try:
-        if platform.system().lower() == "linux":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
+        kill_process_group(process.pid, signal.SIGTERM)
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         try:
-            if platform.system().lower() == "linux":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
+            kill_process_group(process.pid, SIGKILL)
             process.wait(timeout=5)
         except Exception:
             pass

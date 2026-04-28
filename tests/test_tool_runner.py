@@ -41,6 +41,16 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertFalse(tool_runner.is_security_finding_line(info_result))
         self.assertTrue(tool_runner.is_informational_finding_line(info_result))
 
+    def test_scan_request_validation_rejects_unsafe_or_invalid_input(self):
+        with self.assertRaises(tool_runner.ScanInputError):
+            tool_runner.validate_scan_request("example.com; rm -rf /", {})
+
+        with self.assertRaises(tool_runner.ScanInputError):
+            tool_runner.validate_scan_request("example.com", {"ports": "443-80"})
+
+        with self.assertRaises(tool_runner.ScanInputError):
+            tool_runner.validate_scan_request("example.com", {"severity": "urgent"})
+
     def test_security_findings_report_separates_observations_from_risks(self):
         output_dir = Path("tests") / "_report_output"
         output_dir.mkdir(exist_ok=True)
@@ -101,6 +111,7 @@ class ToolRunnerTests(unittest.TestCase):
         output_dir = Path("tests") / "_chain_output"
         created_files = [
             output_dir / "nuclei_targets.txt",
+            output_dir / "nuclei_results.txt",
             output_dir / "comprehensive_scan_report.txt",
             output_dir / "security_findings_report.md",
         ]
@@ -111,7 +122,7 @@ class ToolRunnerTests(unittest.TestCase):
         try:
             with patch.object(tool_runner, "get_executable_path", lambda tool: tool):
                 with patch.object(tool_runner, "run_command", fake_run_command):
-                    tool_runner.run_chain("127.0.0.1", output_dir=output_dir)
+                    results = tool_runner.run_chain("127.0.0.1", output_dir=output_dir, on_line=lambda _line: None)
         finally:
             for path in created_files:
                 path.unlink(missing_ok=True)
@@ -124,6 +135,45 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertIn("-u", httpx_call)
         self.assertIn("127.0.0.1", httpx_call)
         self.assertNotIn("-l", httpx_call)
+        self.assertEqual([tool for tool, _, _ in calls], ["naabu", "httpx"])
+        self.assertEqual(results[-1].tool, "nuclei")
+        self.assertEqual(results[-1].command, [])
+        self.assertTrue(results[-1].success)
+
+    def test_summarize_scan_results_counts_surface_and_findings(self):
+        output_dir = Path("tests") / "_summary_output"
+        output_dir.mkdir(exist_ok=True)
+        nuclei_file = output_dir / "nuclei_results.txt"
+        nuclei_file.write_text(
+            "\n".join(
+                [
+                    "[tech-detect] [http] [info] http://127.0.0.1:8080",
+                    "[exposed-panel] [http] [high] http://127.0.0.1:8080",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        try:
+            summary = tool_runner.summarize_scan_results(
+                "127.0.0.1",
+                [
+                    tool_runner.ToolResult("naabu", ["naabu"], True, output_lines=["127.0.0.1:80"]),
+                    tool_runner.ToolResult("httpx", ["httpx"], True, output_lines=["http://127.0.0.1:80"]),
+                    tool_runner.ToolResult("nuclei", ["nuclei"], True, output_file=nuclei_file),
+                ],
+            )
+        finally:
+            nuclei_file.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertEqual(summary["open_ports"], 1)
+        self.assertEqual(summary["http_services"], 1)
+        self.assertEqual(summary["security_findings"], 1)
+        self.assertEqual(summary["observations"], 1)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import socket
 import subprocess
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,29 @@ SECURITY_FINDING_SEVERITIES = {"critical", "high", "medium", "low"}
 NUCLEI_TEXT_FINDING_PATTERN = re.compile(
     r"^\[(?P<template>[^\]]+)\]\s+\[[^\]]+\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<matched>\S+)"
 )
+TARGET_FORBIDDEN_PATTERN = re.compile(r"[\x00-\x1f\x7f\s]")
+BARE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:\-\[\]/]+$")
+SEVERITY_FILTER_VALUES = SECURITY_FINDING_SEVERITIES | {"info", "unknown"}
+POSITIVE_INTEGER_OPTIONS: Dict[str, Tuple[int, int]] = {
+    "threads": (1, 10000),
+    "rate": (1, 1000000),
+    "naabu_timeout": (1, 86400),
+    "naabu_retries": (0, 100),
+    "httpx_timeout": (1, 86400),
+    "httpx_threads": (1, 10000),
+    "rate_limit": (1, 1000000),
+    "nuclei_rate_limit": (1, 1000000),
+    "nuclei_timeout": (1, 86400),
+    "nuclei_retries": (0, 100),
+    "concurrency": (1, 10000),
+    "parallel_processing": (1, 10000),
+    "max_redirects": (0, 100),
+    "timeout": (1, 604800),
+}
+
+
+class ScanInputError(ValueError):
+    """Raised when a target or scan option is not usable."""
 
 
 @dataclass
@@ -234,6 +258,115 @@ def check_network_connectivity(timeout: int = 5) -> bool:
         except Exception:
             continue
     return False
+
+
+def validate_target(target: object) -> str:
+    """Return a normalized scan target or raise a friendly validation error."""
+    value = str(target or "").strip()
+    if not value:
+        raise ScanInputError("Target is required.")
+    if len(value) > 2048:
+        raise ScanInputError("Target is too long.")
+    if TARGET_FORBIDDEN_PATTERN.search(value):
+        raise ScanInputError("Target cannot contain whitespace or control characters.")
+
+    if "://" in value:
+        parsed = urllib.parse.urlparse(value)
+        if parsed.scheme not in ("http", "https"):
+            raise ScanInputError("Only http and https URLs are supported for URL targets.")
+        if not parsed.netloc:
+            raise ScanInputError("URL targets must include a host.")
+        if "\\" in parsed.netloc:
+            raise ScanInputError("URL host contains an invalid character.")
+        return value
+
+    if not BARE_TARGET_PATTERN.match(value):
+        raise ScanInputError("Target must be an IP, CIDR range, hostname, host:port, or http(s) URL.")
+
+    if "/" in value:
+        host, mask = value.rsplit("/", 1)
+        if not host or not mask.isdigit():
+            raise ScanInputError("CIDR targets must use a numeric prefix length.")
+        prefix = int(mask)
+        max_prefix = 128 if ":" in host else 32
+        if prefix < 0 or prefix > max_prefix:
+            raise ScanInputError(f"CIDR prefix must be between 0 and {max_prefix}.")
+    return value
+
+
+def _coerce_int_option(name: str, value: object, minimum: int, maximum: int) -> int:
+    try:
+        number = int(str(value))
+    except (TypeError, ValueError):
+        raise ScanInputError(f"{name.replace('_', ' ')} must be a number.")
+    if number < minimum or number > maximum:
+        raise ScanInputError(f"{name.replace('_', ' ')} must be between {minimum} and {maximum}.")
+    return number
+
+
+def _validate_port_number(value: str, label: str) -> int:
+    number = _coerce_int_option(label, value, 1, 65535)
+    return number
+
+
+def validate_ports_value(ports: object) -> str:
+    """Validate naabu port syntax while preserving the user's selection."""
+    value = str(ports or "").strip()
+    if not value:
+        return value
+    if value.lower() == "all":
+        return value
+    if value.startswith("top-"):
+        _coerce_int_option("top ports", value.split("-", 1)[1], 1, 65535)
+        return value
+
+    for part in value.split(","):
+        token = part.strip()
+        if not token:
+            raise ScanInputError("Port lists cannot contain empty entries.")
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            start = _validate_port_number(start_text, "port range start")
+            end = _validate_port_number(end_text, "port range end")
+            if start > end:
+                raise ScanInputError("Port ranges must start before they end.")
+            continue
+        _validate_port_number(token, "port")
+    return value
+
+
+def validate_scan_options(options: Dict[str, object]) -> None:
+    """Validate common scanner options before work is started."""
+    ports = options.get("ports")
+    if ports not in (None, ""):
+        validate_ports_value(ports)
+
+    top_ports = options.get("top_ports")
+    if top_ports not in (None, ""):
+        _coerce_int_option("top ports", top_ports, 1, 65535)
+
+    for name, (minimum, maximum) in POSITIVE_INTEGER_OPTIONS.items():
+        value = options.get(name)
+        if value not in (None, ""):
+            _coerce_int_option(name, value, minimum, maximum)
+
+    scan_type = options.get("scan_type")
+    if scan_type not in (None, "", "syn", "connect"):
+        raise ScanInputError("scan type must be syn or connect.")
+
+    severity = options.get("severity")
+    if severity not in (None, ""):
+        values = [item.strip().lower() for item in str(severity).split(",") if item.strip()]
+        invalid = [item for item in values if item not in SEVERITY_FILTER_VALUES]
+        if invalid:
+            raise ScanInputError(f"Unsupported nuclei severity: {', '.join(invalid)}.")
+
+
+def validate_scan_request(target: object, options: Optional[Dict[str, object]] = None) -> str:
+    """Validate a target plus optional scanner options and return the target string."""
+    clean_target = validate_target(target)
+    validate_scan_options(options or {})
+    return clean_target
 
 
 def normalize_ports(ports: Optional[str], top_ports: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -859,6 +992,60 @@ def _severity_counts(findings: Sequence[Dict[str, object]]) -> Dict[str, int]:
     return counts
 
 
+def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[str, object]:
+    """Build app-friendly counts and result metadata from scanner outputs."""
+    by_tool = {result.tool: result for result in results}
+
+    naabu_result = by_tool.get("naabu")
+    naabu_lines = _read_nonempty_lines(naabu_result.output_file if naabu_result else None)
+    if not naabu_lines and naabu_result:
+        naabu_lines = naabu_result.output_lines
+    open_ports = sorted(set(_extract_naabu_targets(naabu_lines)))
+
+    httpx_result = by_tool.get("httpx")
+    httpx_lines = _read_nonempty_lines(httpx_result.output_file if httpx_result else None)
+    if not httpx_lines and httpx_result:
+        httpx_lines = httpx_result.output_lines
+    http_services = sorted(set(_extract_http_urls(httpx_lines)))
+
+    nuclei_result = by_tool.get("nuclei")
+    findings = parse_nuclei_findings(nuclei_result.output_file if nuclei_result else None)
+    severity_counts = _severity_counts(findings)
+    security_findings = [
+        finding for finding in findings
+        if str(finding.get("severity") or "").lower() in SECURITY_FINDING_SEVERITIES
+    ]
+    observations = [
+        finding for finding in findings
+        if str(finding.get("severity") or "").lower() not in SECURITY_FINDING_SEVERITIES
+    ]
+
+    return {
+        "target": target,
+        "open_ports": len(open_ports),
+        "open_port_targets": open_ports,
+        "http_services": len(http_services),
+        "http_urls": http_services,
+        "findings_total": len(findings),
+        "security_findings": len(security_findings),
+        "observations": len(observations),
+        "severity_counts": severity_counts,
+        "tools": [
+            {
+                "tool": result.tool,
+                "success": result.success,
+                "returncode": result.returncode,
+                "error": result.error,
+                "output_file": str(result.output_file) if result.output_file else None,
+                "output_lines": len(result.output_lines),
+                "dry_run": result.dry_run,
+            }
+            for result in results
+        ],
+        "findings": findings[:100],
+    }
+
+
 def write_security_findings_report(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
     nuclei_output = next((result.output_file for result in results if result.tool == "nuclei" and result.output_file), None)
     parsed_findings = parse_nuclei_findings(nuclei_output)
@@ -987,6 +1174,7 @@ def run_tool(
     on_line: Optional[Callable[[str], None]] = None,
     **options,
 ) -> ToolResult:
+    target = validate_scan_request(target, options)
     output_path: Optional[Path] = None
     if save_output:
         output_dir = output_dir or default_output_dir(target)
@@ -1086,6 +1274,7 @@ def run_chain(
     on_line: Optional[Callable[[str], None]] = None,
     **options,
 ) -> List[ToolResult]:
+    target = validate_scan_request(target, options)
     output_dir = output_dir or default_output_dir(target)
     if not dry_run:
         output_dir = ensure_output_dir(output_dir)
@@ -1165,14 +1354,33 @@ def run_chain(
 
     httpx_lines = [] if dry_run else (_read_nonempty_lines(httpx_file) or httpx_result.output_lines)
     urls = _extract_http_urls(httpx_lines)
+    nuclei_json = json_output or bool(options.get("nuclei_json"))
+    nuclei_file = output_path_for("nuclei", output_dir, nuclei_json, bool(options.get("nuclei_csv")))
+    if not urls and not dry_run:
+        message = "No HTTP targets discovered by httpx; skipping nuclei scan."
+        if on_line:
+            on_line(message)
+        else:
+            print(message)
+        if save_output:
+            nuclei_file.write_text("", encoding="utf-8")
+        results.append(
+            ToolResult(
+                tool="nuclei",
+                command=[],
+                success=True,
+                output_lines=[message],
+                output_file=nuclei_file if save_output else None,
+            )
+        )
+        write_summary(output_dir, target, results)
+        return results
     if not urls:
         urls = target_urls_for_nuclei(target)
     nuclei_targets = output_dir / "nuclei_targets.txt"
     if not dry_run:
         _write_lines(nuclei_targets, urls)
 
-    nuclei_json = json_output or bool(options.get("nuclei_json"))
-    nuclei_file = output_path_for("nuclei", output_dir, nuclei_json, bool(options.get("nuclei_csv")))
     nuclei_cmd = build_nuclei_command(
         target_list=str(nuclei_targets),
         templates=options.get("templates"),

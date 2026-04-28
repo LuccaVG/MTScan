@@ -9,10 +9,9 @@ tools:
 
 The project has two supported interfaces:
 
+- Local web app: `python3 src/app_server.py`
 - Interactive menu: `python3 mtscan.py`
 - Direct CLI: `python3 src/workflow.py`
-
-There is no app/UI layer yet.
 
 ## Requirements
 
@@ -38,6 +37,17 @@ export PATH="$PATH:/usr/local/bin"
 ```
 
 ## Usage
+
+Local app:
+
+```bash
+python3 src/app_server.py --host 127.0.0.1 --port 8765
+```
+
+Open `http://127.0.0.1:8765`. The app runs scans through the shared Python
+runner, not by calling the CLI. It includes live output, scan history, result
+files, and canvas graphs for severity and exposed surface counts. On non-Linux
+development machines, keep Dry run enabled to preview commands.
 
 Interactive menu:
 

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MTScan</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>MTScan</h1>
+      <p id="environmentText">Checking scanner environment...</p>
+    </div>
+    <button id="refreshHealth" class="ghost-button" type="button">Refresh</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls-panel">
+      <form id="scanForm">
+        <label class="field">
+          <span>Target</span>
+          <input id="targetInput" name="target" type="text" autocomplete="off" placeholder="example.com" required>
+        </label>
+
+        <div class="field">
+          <span>Mode</span>
+          <div class="segmented" role="radiogroup" aria-label="Scan mode">
+            <label><input type="radio" name="mode" value="chain" checked><span>Chain</span></label>
+            <label><input type="radio" name="mode" value="naabu"><span>Naabu</span></label>
+            <label><input type="radio" name="mode" value="httpx"><span>HTTPX</span></label>
+            <label><input type="radio" name="mode" value="nuclei"><span>Nuclei</span></label>
+          </div>
+        </div>
+
+        <label class="field">
+          <span>Profile</span>
+          <select id="profileSelect" name="profile">
+            <option value="default">Default</option>
+            <option value="fast">Fast</option>
+            <option value="stealth">Stealth</option>
+            <option value="deep">Deep</option>
+          </select>
+        </label>
+
+        <div class="two-column">
+          <label class="field">
+            <span>Top Ports</span>
+            <input id="topPortsInput" name="top_ports" type="number" min="1" max="65535" value="1000">
+          </label>
+          <label class="field">
+            <span>Timeout</span>
+            <input id="timeoutInput" name="timeout" type="number" min="1" max="604800" value="900">
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Severity</span>
+          <select id="severitySelect" name="severity">
+            <option value="">Any</option>
+            <option value="critical,high">Critical and High</option>
+            <option value="critical,high,medium">Critical to Medium</option>
+            <option value="low,info">Low and Info</option>
+          </select>
+        </label>
+
+        <div class="switch-row">
+          <label class="switch">
+            <input id="dryRunInput" type="checkbox" checked>
+            <span></span>
+            Dry run
+          </label>
+          <label class="switch">
+            <input id="jsonOutputInput" type="checkbox" checked>
+            <span></span>
+            JSON output
+          </label>
+        </div>
+
+        <div id="formError" class="form-error" aria-live="polite"></div>
+        <button class="primary-button" type="submit">Start Scan</button>
+      </form>
+    </section>
+
+    <section class="panel results-panel">
+      <div class="scan-header">
+        <div>
+          <h2 id="scanTitle">No scan selected</h2>
+          <p id="scanSubtitle">Ready</p>
+        </div>
+        <span id="scanState" class="state-badge idle">Idle</span>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric">
+          <span>Open Ports</span>
+          <strong id="openPortsMetric">0</strong>
+        </div>
+        <div class="metric">
+          <span>HTTP Services</span>
+          <strong id="httpMetric">0</strong>
+        </div>
+        <div class="metric">
+          <span>Security Findings</span>
+          <strong id="riskMetric">0</strong>
+        </div>
+        <div class="metric">
+          <span>Observations</span>
+          <strong id="observationMetric">0</strong>
+        </div>
+      </div>
+
+      <div class="chart-grid">
+        <section class="chart-panel">
+          <div class="chart-title">Severity</div>
+          <canvas id="severityChart" width="520" height="230"></canvas>
+        </section>
+        <section class="chart-panel">
+          <div class="chart-title">Surface</div>
+          <canvas id="surfaceChart" width="520" height="230"></canvas>
+        </section>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" type="button" data-tab="output">Output</button>
+        <button class="tab" type="button" data-tab="findings">Findings</button>
+        <button class="tab" type="button" data-tab="files">Files</button>
+      </div>
+
+      <section id="outputTab" class="tab-panel active">
+        <pre id="logOutput"></pre>
+      </section>
+      <section id="findingsTab" class="tab-panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Severity</th>
+                <th>Finding</th>
+                <th>Target</th>
+              </tr>
+            </thead>
+            <tbody id="findingsTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="filesTab" class="tab-panel">
+        <div id="filesList" class="files-list"></div>
+      </section>
+    </section>
+
+    <aside class="panel history-panel">
+      <div class="panel-title">Scans</div>
+      <div id="scanHistory" class="scan-history"></div>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

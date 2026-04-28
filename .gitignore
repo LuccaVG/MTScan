@@ -133,6 +133,7 @@ results*/
 output/
 reports/
 *.html
+!web/*.html
 *.json
 *.jsonl
 scan_results/
