@@ -11,7 +11,7 @@ rich==13.3.5
 cassandra-driver>=3.29,<4
 
 # Progress and formatting
-tqdm==4.65.0
+tqdm==4.67.3
 
 # JSON processing
 jsonschema==4.19.0
