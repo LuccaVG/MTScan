@@ -326,13 +326,13 @@ class CassandraScanStore:
             return []
         fetch_limit = max(1, min(limit * 5 if target else limit, 500))
         rows = self.session.execute(
-            f"""
+            """
             SELECT finished_at, scan_id, target, mode, status, summary_json
             FROM scan_history
             WHERE bucket = %s
-            LIMIT {fetch_limit}
+            LIMIT %s
             """,
-            ("all",),
+            ("all", fetch_limit),
         )
         records: List[Dict[str, object]] = []
         for row in rows:

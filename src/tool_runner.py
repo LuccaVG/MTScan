@@ -113,7 +113,7 @@ def default_output_dir(target: str) -> Path:
     timestamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_target = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in target).strip("._") or "target"
     if len(safe_target) > MAX_OUTPUT_TARGET_SLUG:
-        digest = hashlib.sha1(target.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        digest = hashlib.sha256(target.encode("utf-8", errors="ignore")).hexdigest()[:10]
         safe_target = f"{safe_target[:MAX_OUTPUT_TARGET_SLUG]}_{digest}"
     return project_root() / f"results_{safe_target}_{timestamp}"
 
@@ -286,7 +286,7 @@ def check_network_connectivity(timeout: int = 5) -> bool:
                 socket.gethostbyname(str(target))
                 return True
             elif kind == "http":
-                urllib.request.urlopen(str(target), timeout=timeout)
+                urllib.request.urlopen(str(target), timeout=timeout)  # nosec B310
                 return True
         except Exception:
             continue

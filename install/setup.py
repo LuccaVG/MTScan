@@ -37,6 +37,7 @@ import time
 import ctypes
 import urllib.request
 import signal
+import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union, cast
 
@@ -177,7 +178,8 @@ def expose_tool_to_path(tool: str, source_path: str) -> bool:
     except OSError:
         try:
             shutil.copy2(source_path, target_path)
-            os.chmod(target_path, 0o755)
+            # Installed CLI shims must be executable by regular users.
+            os.chmod(target_path, 0o755)  # nosec B103
             return True
         except OSError as exc:
             print(f"{Colors.YELLOW}  Could not expose {tool} at /usr/local/bin: {exc}{Colors.END}")
@@ -340,7 +342,7 @@ def check_internet_connectivity() -> bool:
     http_urls = ["https://www.google.com", "https://github.com"]
     for url in http_urls:
         try:
-            urllib.request.urlopen(url, timeout=10)
+            urllib.request.urlopen(url, timeout=10)  # nosec B310
             print(f"{Colors.GREEN}   HTTP connectivity to {url}: SUCCESS{Colors.END}")
             return True
         except Exception:
@@ -618,15 +620,17 @@ def install_libpcap_alternative() -> bool:
                 f"http://http.kali.org/kali/pool/main/libp/libpcap/libpcap0.8-dev_1.10.4-4_{arch}.deb"
             ]
             
-            for mirror in mirrors:
-                try:
-                    if run_with_timeout(['wget', '-q', mirror, '-O', '/tmp/libpcap-dev.deb'], 60, f"Downloading from {mirror}"):
-                        if run_with_timeout(['dpkg', '-i', '/tmp/libpcap-dev.deb'], 60, "Installing downloaded package"):
-                            # Install dependencies if needed
-                            run_with_timeout(['apt', '--fix-broken', 'install', '-y'], 120, "Fixing dependencies")
-                            return True
-                except:
-                    continue
+            with tempfile.TemporaryDirectory(prefix="mtscan-libpcap-deb-") as tmp_dir:
+                package_path = os.path.join(tmp_dir, "libpcap-dev.deb")
+                for mirror in mirrors:
+                    try:
+                        if run_with_timeout(['wget', '-q', mirror, '-O', package_path], 60, f"Downloading from {mirror}"):
+                            if run_with_timeout(['dpkg', '-i', package_path], 60, "Installing downloaded package"):
+                                # Install dependencies if needed
+                                run_with_timeout(['apt', '--fix-broken', 'install', '-y'], 120, "Fixing dependencies")
+                                return True
+                    except:
+                        continue
                     
         except Exception as e:
             print(f"{Colors.YELLOW} Manual download failed: {e}{Colors.END}")
@@ -650,17 +654,19 @@ def install_libpcap_alternative() -> bool:
                 run_with_timeout(['apt', 'install', dep, '-y'], 120, f"Installing {dep}")
             
             # Download and build libpcap
-            if run_with_timeout(['wget', '-q', 'https://www.tcpdump.org/release/libpcap-1.10.4.tar.gz', '-O', '/tmp/libpcap.tar.gz'], 120, "Downloading libpcap source"):
-                subprocess.run(['tar', '-xzf', '/tmp/libpcap.tar.gz', '-C', '/tmp/'], check=True)
-                libpcap_dir = '/tmp/libpcap-1.10.4'
-                if os.path.exists(libpcap_dir):
-                    # Configure, compile and install
-                    subprocess.run(['./configure', '--prefix=/usr/local'], cwd=libpcap_dir, check=True)
-                    subprocess.run(['make'], cwd=libpcap_dir, check=True)
-                    subprocess.run(['make', 'install'], cwd=libpcap_dir, check=True)
-                    subprocess.run(['ldconfig'], check=True)  # Update library cache
-                    print(f"{Colors.GREEN} libpcap built and installed from source{Colors.END}")
-                    return True
+            with tempfile.TemporaryDirectory(prefix="mtscan-libpcap-src-") as tmp_dir:
+                archive_path = os.path.join(tmp_dir, "libpcap.tar.gz")
+                if run_with_timeout(['wget', '-q', 'https://www.tcpdump.org/release/libpcap-1.10.4.tar.gz', '-O', archive_path], 120, "Downloading libpcap source"):
+                    subprocess.run(['tar', '-xzf', archive_path, '-C', tmp_dir], check=True)
+                    libpcap_dir = os.path.join(tmp_dir, 'libpcap-1.10.4')
+                    if os.path.exists(libpcap_dir):
+                        # Configure, compile and install
+                        subprocess.run(['./configure', '--prefix=/usr/local'], cwd=libpcap_dir, check=True)
+                        subprocess.run(['make'], cwd=libpcap_dir, check=True)
+                        subprocess.run(['make', 'install'], cwd=libpcap_dir, check=True)
+                        subprocess.run(['ldconfig'], check=True)  # Update library cache
+                        print(f"{Colors.GREEN} libpcap built and installed from source{Colors.END}")
+                        return True
         except Exception as e:
             print(f"{Colors.YELLOW} Source build failed: {e}{Colors.END}")
         
@@ -779,15 +785,18 @@ def setup_go_environment_complete() -> bool:
             go_archive = f"go{go_version}.linux-amd64.tar.gz"
             
             try:
-                # Download Go
-                subprocess.run([
-                    'wget', '-q', 
-                    f'https://golang.org/dl/{go_archive}',
-                    '-O', f'/tmp/{go_archive}'
-                ], check=True)
-                
-                # Extract Go
-                subprocess.run(['sudo', 'tar', '-C', '/usr/local', '-xzf', f'/tmp/{go_archive}'], check=True)
+                with tempfile.TemporaryDirectory(prefix="mtscan-go-") as tmp_dir:
+                    go_archive_path = os.path.join(tmp_dir, go_archive)
+
+                    # Download Go
+                    subprocess.run([
+                        'wget', '-q',
+                        f'https://golang.org/dl/{go_archive}',
+                        '-O', go_archive_path
+                    ], check=True)
+
+                    # Extract Go
+                    subprocess.run(['sudo', 'tar', '-C', '/usr/local', '-xzf', go_archive_path], check=True)
                 
                 # Set up Go binary path
                 go_bin = '/usr/local/go/bin'
@@ -1471,7 +1480,7 @@ alias vat-update="nuclei -update-templates"
         aliases_file = os.path.join(config_dir, 'vat_aliases.sh')
         with open(aliases_file, 'w') as f:
             f.write(aliases_content)
-        os.chmod(aliases_file, 0o755)
+        os.chmod(aliases_file, 0o644)
         
         print(f"{Colors.GREEN} Aliases created: {aliases_file}{Colors.END}")
         print(f"{Colors.YELLOW} To use aliases: source {aliases_file}{Colors.END}")

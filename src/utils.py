@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import time
 import json
+import shlex
 from pathlib import Path
 from typing import List, Dict, Any, Union, Optional, Tuple
 
@@ -16,10 +17,15 @@ SECURITY_TOOLS = ["naabu", "httpx", "nuclei"]
 
 def run_cmd(cmd: Union[str, List[str]], shell: bool = False, check: bool = False, use_sudo: bool = False, timeout: int = DEFAULT_TIMEOUT, retry: int = DEFAULT_RETRY, silent: bool = False) -> bool:
     """Enhanced command runner with real-time output for security tools."""
+    if shell:
+        raise ValueError("shell=True is not supported; pass commands as an argument list")
+
     if isinstance(cmd, list):
         cmd_str = ' '.join(cmd)
+        run_args = cmd
     else:
         cmd_str = cmd
+        run_args = shlex.split(cmd)
         
     for attempt in range(retry + 1):
         try:
@@ -32,9 +38,9 @@ def run_cmd(cmd: Union[str, List[str]], shell: bool = False, check: bool = False
                     # os.geteuid() is only available on Unix-like systems
                     if hasattr(os, 'geteuid') and os.geteuid() != 0: # type: ignore
                         if isinstance(cmd, list):
-                            cmd = ["sudo"] + cmd
+                            run_args = ["sudo"] + run_args
                         else:
-                            cmd = f"sudo {cmd}"
+                            run_args = ["sudo"] + run_args
                 except AttributeError:
                     # We're not on a Unix system, so we can't use sudo
                     pass
@@ -44,8 +50,8 @@ def run_cmd(cmd: Union[str, List[str]], shell: bool = False, check: bool = False
             if silent:
                 # Silent mode - capture all output
                 process = subprocess.Popen(
-                    cmd, 
-                    shell=shell, 
+                    run_args,
+                    shell=False,
                     stdout=subprocess.DEVNULL, 
                     stderr=subprocess.DEVNULL, 
                     text=True
@@ -53,8 +59,8 @@ def run_cmd(cmd: Union[str, List[str]], shell: bool = False, check: bool = False
             else:
                 # Real-time mode - let output pass through to terminal
                 process = subprocess.Popen(
-                    cmd, 
-                    shell=shell, 
+                    run_args,
+                    shell=False,
                     text=True
                 )
             
@@ -72,7 +78,7 @@ def run_cmd(cmd: Union[str, List[str]], shell: bool = False, check: bool = False
                         continue
                     
                     if check:
-                        raise subprocess.CalledProcessError(process.returncode, cmd)
+                        raise subprocess.CalledProcessError(process.returncode, run_args)
                     return False
                 
                 return True
@@ -273,7 +279,7 @@ def normalize_path(path: str) -> str:
 def ensure_executable(file_path: str) -> bool:
     """Make sure a file is executable (Linux only)."""
     try:
-        os.chmod(file_path, 0o755)
+        os.chmod(file_path, 0o700)
         return True
     except Exception as e:
         print(f"Error making {file_path} executable: {e}")

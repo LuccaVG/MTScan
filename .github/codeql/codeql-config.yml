@@ -5,12 +5,7 @@ queries:
   - uses: security-and-quality
 
 paths:
-  - commands
-  - install
-  - src
-  - tests
-  - web
-  - mtscan.py
+  - .
 
 paths-ignore:
   - data
