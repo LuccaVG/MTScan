@@ -1,2 +1,2 @@
 # Optional durable graph storage used by src/scan_storage.py.
-cassandra-driver>=3.29,<4
+cassandra-driver>=3.30.0,<4
