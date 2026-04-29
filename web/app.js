@@ -165,25 +165,49 @@ function renderScan(scan) {
   els.cve.textContent = summary.cve_findings || chartData.cve_findings || 0;
   els.log.textContent = (scan.lines || []).join("\n");
   els.log.scrollTop = els.log.scrollHeight;
-  renderFindings(summary.findings || []);
+  renderFindings(summary.findings || [], summary);
   renderFiles(scan);
   drawSeverityChart(chartData.severity || summary.severity_counts || {});
   drawSurfaceChart(summary);
   drawCategoryChart(chartData.categories || summary.category_counts || {});
 }
 
-function renderFindings(findings) {
+function surfaceResultRows(summary) {
+  const rows = [];
+  (summary.open_port_targets || []).forEach((target) => {
+    rows.push({
+      severity: "surface",
+      category: "Open TCP Service",
+      name: "Reachable port",
+      cve: "N/A",
+      matched_at: target
+    });
+  });
+  (summary.http_urls || []).forEach((url) => {
+    rows.push({
+      severity: "surface",
+      category: "HTTP Service",
+      name: "Reachable web service",
+      cve: "N/A",
+      matched_at: url
+    });
+  });
+  return rows;
+}
+
+function renderFindings(findings, summary = {}) {
   els.findings.replaceChildren();
-  if (!findings.length) {
+  const rows = [...surfaceResultRows(summary), ...findings];
+  if (!rows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 5;
-    cell.textContent = "No findings";
+    cell.textContent = "No results";
     row.appendChild(cell);
     els.findings.appendChild(row);
     return;
   }
-  findings.forEach((finding) => {
+  rows.forEach((finding) => {
     const row = document.createElement("tr");
     ["severity", "category", "name", "cve", "matched_at"].forEach((key) => {
       const cell = document.createElement("td");

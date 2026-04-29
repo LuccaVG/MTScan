@@ -906,6 +906,41 @@ def _write_lines(path: Path, lines: Iterable[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _emit_workflow_line(message: str, on_line: Optional[Callable[[str], None]]) -> None:
+    if on_line:
+        on_line(message)
+    else:
+        print(message)
+
+
+def _preview_items(items: Sequence[str], limit: int = 8) -> str:
+    preview = ", ".join(items[:limit])
+    if len(items) > limit:
+        preview += f", ... {len(items) - limit} more"
+    return preview or "none"
+
+
+def _saved_output_candidates(tool: str, output_dir: Path) -> List[Path]:
+    candidates = [
+        output_path_for(tool, output_dir, json_output=False, csv_output=False),
+        output_path_for(tool, output_dir, json_output=True, csv_output=False),
+        output_path_for(tool, output_dir, json_output=False, csv_output=True),
+    ]
+    return list(dict.fromkeys(candidates))
+
+
+def summarize_saved_outputs(target: str, output_dir: Path) -> Dict[str, object]:
+    """Summarize conventional scanner output files from a completed result directory."""
+    results: List[ToolResult] = []
+    for tool in SECURITY_TOOLS:
+        existing = [path for path in _saved_output_candidates(tool, output_dir) if path.exists()]
+        if not existing:
+            continue
+        output_file = max(existing, key=lambda path: path.stat().st_mtime)
+        results.append(ToolResult(tool=tool, command=[], success=True, output_file=output_file))
+    return summarize_scan_results(target, results)
+
+
 def _markdown_cell(value: object) -> str:
     if isinstance(value, list):
         value = ", ".join(str(item) for item in value if item)
@@ -1834,7 +1869,18 @@ def run_chain(
     results.append(naabu_result)
 
     naabu_lines = [] if dry_run else (_read_nonempty_lines(naabu_file) or naabu_result.output_lines)
-    naabu_targets = _extract_naabu_targets(naabu_lines)
+    naabu_targets = sorted(set(_extract_naabu_targets(naabu_lines)))
+    if not dry_run:
+        if naabu_targets:
+            _emit_workflow_line(
+                f"[MTScan] Open TCP services discovered ({len(naabu_targets)}): {_preview_items(naabu_targets)}",
+                on_line,
+            )
+        else:
+            _emit_workflow_line(
+                "[MTScan] No open TCP services were parsed from naabu output; httpx will probe the original target.",
+                on_line,
+            )
     httpx_input = output_dir / "httpx_targets.txt"
     if naabu_targets:
         _write_lines(httpx_input, naabu_targets)
@@ -1879,7 +1925,18 @@ def run_chain(
     results.append(httpx_result)
 
     httpx_lines = [] if dry_run else (_read_nonempty_lines(httpx_file) or httpx_result.output_lines)
-    urls = _extract_http_urls(httpx_lines)
+    urls = sorted(set(_extract_http_urls(httpx_lines)))
+    if not dry_run:
+        if urls:
+            _emit_workflow_line(
+                f"[MTScan] HTTP services discovered ({len(urls)}): {_preview_items(urls)}",
+                on_line,
+            )
+        elif naabu_targets:
+            _emit_workflow_line(
+                "[MTScan] Discovered ports did not respond as HTTP(S); nuclei scans HTTP(S) targets only.",
+                on_line,
+            )
     nuclei_json = json_output or bool(options.get("nuclei_json"))
     nuclei_file = output_path_for("nuclei", output_dir, nuclei_json, bool(options.get("nuclei_csv")))
     if not urls and not dry_run:

@@ -389,6 +389,74 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertEqual(summary["security_findings"], 1)
         self.assertEqual(summary["observations"], 1)
 
+    def test_summarize_saved_outputs_counts_ssh_only_exposure(self):
+        output_dir = Path("tests") / "_saved_summary_output"
+        output_dir.mkdir(exist_ok=True)
+        files = [
+            output_dir / "naabu_results.txt",
+            output_dir / "httpx_results.txt",
+            output_dir / "nuclei_results.txt",
+        ]
+        files[0].write_text("127.0.0.1:22\n", encoding="utf-8")
+        files[1].write_text("", encoding="utf-8")
+        files[2].write_text("", encoding="utf-8")
+
+        try:
+            summary = tool_runner.summarize_saved_outputs("127.0.0.1", output_dir)
+        finally:
+            for path in files:
+                path.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertEqual(summary["open_ports"], 1)
+        self.assertEqual(summary["open_port_targets"], ["127.0.0.1:22"])
+        self.assertEqual(summary["http_services"], 0)
+        self.assertEqual(summary["security_findings"], 0)
+
+    def test_run_chain_logs_ssh_only_exposure_before_skipping_nuclei(self):
+        calls = []
+        messages = []
+
+        def fake_run_command(tool, command, timeout=None, output_file=None, dry_run=False, on_line=None):
+            calls.append(tool)
+            output_lines = ["127.0.0.1:22"] if tool == "naabu" else []
+            return tool_runner.ToolResult(
+                tool=tool,
+                command=list(command),
+                success=True,
+                returncode=0,
+                output_lines=output_lines,
+                output_file=Path(output_file) if output_file else None,
+            )
+
+        output_dir = Path("tests") / "_ssh_chain_output"
+        output_dir.mkdir(exist_ok=True)
+        cleanup = [
+            output_dir / "httpx_targets.txt",
+            output_dir / "nuclei_results.txt",
+            output_dir / tool_runner.REPORT_FILENAME,
+        ]
+
+        try:
+            with patch.object(tool_runner, "get_executable_path", lambda tool: tool):
+                with patch.object(tool_runner, "run_command", fake_run_command):
+                    results = tool_runner.run_chain("127.0.0.1", output_dir=output_dir, on_line=messages.append)
+        finally:
+            for path in cleanup:
+                path.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertEqual(calls, ["naabu", "httpx"])
+        self.assertEqual([result.tool for result in results], ["naabu", "httpx", "nuclei"])
+        self.assertTrue(any("Open TCP services discovered (1): 127.0.0.1:22" in message for message in messages))
+        self.assertTrue(any("did not respond as HTTP(S)" in message for message in messages))
+
 
 if __name__ == "__main__":
     unittest.main()
