@@ -1,7 +1,7 @@
 # Core dependencies
 requests==2.32.4
 colorama==0.4.6
-markdown==3.4.3
+markdown==3.10.2
 
 # Reporting dependencies
 jinja2==3.1.6
