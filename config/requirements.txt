@@ -1,5 +1,5 @@
 # Core dependencies
-requests==2.32.4
+requests==2.33.0
 colorama==0.4.6
 markdown==3.4.3
 
@@ -11,7 +11,7 @@ rich==13.3.5
 cassandra-driver>=3.29,<4
 
 # Progress and formatting
-tqdm==4.65.0
+tqdm==4.66.3
 
 # JSON processing
 jsonschema==4.19.0
