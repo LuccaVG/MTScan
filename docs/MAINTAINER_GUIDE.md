@@ -116,7 +116,9 @@ so old JSONL lines and old Cassandra rows still render in the app.
 
 ## Dependency Hygiene
 
-Dependencies are pinned in `config/requirements.txt`. When changing them:
+Python dependencies are declared in `config/requirements.txt`. Keep this file
+small and include only packages imported by the project or needed by an optional
+runtime backend. When changing it:
 
 1. Prefer the smallest patch or minor bump that fixes the issue.
 2. Run the unit tests.
@@ -207,10 +209,9 @@ Fixed
 - Redacted short-form nuclei secret flags in reports and menu previews.
 
 Security
-- Bumped requests and Jinja2 pins to patched versions.
+- Removed unused vulnerable dependency pins from config/requirements.txt.
 
 Verification
 - python -m unittest discover -s tests -v
 - python -m compileall src commands tests install
 ```
-

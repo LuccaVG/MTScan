@@ -56,7 +56,7 @@ class AppServerTests(unittest.TestCase):
                 "-u",
                 "https://example.com",
                 "-H",
-                "Authorization: Bearer secret",
+                "X-Test-Header: REDACTMEVALUE",
                 "-o",
                 "C:\\Users\\lucca\\Desktop\\scan\\httpx_results.txt",
             ],
@@ -69,7 +69,7 @@ class AppServerTests(unittest.TestCase):
 
         self.assertEqual(public["output_file"], "httpx_results.txt")
         self.assertIn("[redacted]", command_preview)
-        self.assertNotIn("secret", " ".join(command_preview))
+        self.assertNotIn("REDACTMEVALUE", " ".join(command_preview))
         self.assertNotIn("C:\\Users", " ".join(command_preview))
 
     def test_health_payload_does_not_expose_local_paths(self):

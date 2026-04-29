@@ -1328,11 +1328,7 @@ def install_python_dependencies() -> bool:
             # Fallback essential packages
             print(f"{Colors.WHITE}Installing essential Python packages...{Colors.END}")
             essential_packages = [
-                'requests>=2.32.0',
-                'colorama>=0.4.6', 
-                'markdown>=3.4.0',
-                'jinja2>=3.1.0',
-                'rich>=13.0.0'
+                'cassandra-driver>=3.29,<4',
             ]
             
             for package in essential_packages:

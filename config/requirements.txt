@@ -1,20 +1,2 @@
-# Core dependencies
-requests==2.32.4
-colorama==0.4.6
-markdown==3.4.3
-
-# Reporting dependencies
-jinja2==3.1.6
-rich==13.3.5
-
-# Optional durable graph storage
+# Optional durable graph storage used by src/scan_storage.py.
 cassandra-driver>=3.29,<4
-
-# Progress and formatting
-tqdm==4.65.0
-
-# JSON processing
-jsonschema==4.19.0
-
-# YAML processing
-pyyaml==6.0.1

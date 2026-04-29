@@ -201,7 +201,7 @@ class ToolRunnerTests(unittest.TestCase):
                             "-u",
                             "https://example.com",
                             "-H",
-                            "Authorization: Bearer secret-token",
+                            "X-Test-Header: REDACTMEVALUE",
                             "-o",
                             str(output_dir / "httpx_results.txt"),
                         ],
@@ -220,7 +220,7 @@ class ToolRunnerTests(unittest.TestCase):
 
         self.assertIn("-H [redacted]", text)
         self.assertIn("[redacted]", text)
-        self.assertNotIn("secret-token", text)
+        self.assertNotIn("REDACTMEVALUE", text)
         self.assertNotIn(str(output_dir), text)
 
     def test_report_redacts_nuclei_short_form_sensitive_values(self):
@@ -240,11 +240,11 @@ class ToolRunnerTests(unittest.TestCase):
                             "-u",
                             "https://example.com",
                             "-proxy",
-                            "http://user:secret-proxy@example.net:8080",
+                            "http://proxy.local:8080",
                             "-interactsh-token",
-                            "secret-interactsh-token",
+                            "REDACTMEINTERACTSH",
                             "-var",
-                            "api_key=secret-variable",
+                            "tenant=REDACTMEVARIABLE",
                             "-markdown-export",
                             str(output_dir / "markdown"),
                             "-sarif-export",
@@ -270,9 +270,9 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertIn("-markdown-export markdown", text)
         self.assertIn("-sarif-export nuclei.sarif", text)
         self.assertIn("-store-resp-dir responses", text)
-        self.assertNotIn("secret-proxy", text)
-        self.assertNotIn("secret-interactsh-token", text)
-        self.assertNotIn("secret-variable", text)
+        self.assertNotIn("proxy.local:8080", text)
+        self.assertNotIn("REDACTMEINTERACTSH", text)
+        self.assertNotIn("REDACTMEVARIABLE", text)
         self.assertNotIn(str(output_dir), text)
 
     def test_run_chain_falls_back_to_original_target_when_naabu_has_no_targets(self):
