@@ -44,6 +44,42 @@ class ScanStorageTests(unittest.TestCase):
         self.assertEqual(summary["open_ports"], 2)
         self.assertEqual(fetched["report_file"], "vulnerability_report.md")
 
+    def test_file_store_fetches_latest_duplicate_scan_record(self):
+        history_file = Path("tests") / "_scan_history_duplicates.jsonl"
+        history_file.unlink(missing_ok=True)
+        store = scan_storage.FileScanStore(history_file)
+
+        try:
+            store.save_scan(
+                {
+                    "id": "abc123def456",
+                    "target": "example.com",
+                    "status": "running",
+                    "finished_at": "2026-04-28T01:00:00",
+                    "summary": {"security_findings": 0},
+                }
+            )
+            store.save_scan(
+                {
+                    "id": "abc123def456",
+                    "target": "example.com",
+                    "status": "completed",
+                    "finished_at": "2026-04-28T01:05:00",
+                    "summary": {"security_findings": 3},
+                }
+            )
+
+            scans = store.list_scans()
+            fetched = store.get_scan("abc123def456")
+        finally:
+            history_file.unlink(missing_ok=True)
+
+        self.assertEqual(len(scans), 1)
+        self.assertIsNotNone(fetched)
+        assert fetched is not None
+        self.assertEqual(fetched["status"], "completed")
+        self.assertEqual(cast(Dict[str, object], fetched["summary"])["security_findings"], 3)
+
     def test_invalid_cassandra_identifier_is_rejected(self):
         with self.assertRaises(RuntimeError):
             scan_storage._cql_identifier("bad-name")

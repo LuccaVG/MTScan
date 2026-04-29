@@ -59,6 +59,7 @@ try:
     from src.tool_runner import (
         is_informational_finding_line as _is_informational_finding_line,
         is_security_finding_line as _is_security_finding_line,
+        redact_command as _redact_command,
     )
 except ImportError:
     def _is_security_finding_line(line: str) -> bool:
@@ -67,8 +68,38 @@ except ImportError:
     def _is_informational_finding_line(line: str) -> bool:
         return False
 
+    def _redact_command(command):
+        return [str(part) for part in command]
+
 is_security_finding_line: FindingLinePredicate = _is_security_finding_line
 is_informational_finding_line: FindingLinePredicate = _is_informational_finding_line
+
+SENSITIVE_FLAG_NAMES = {
+    "headers",
+    "custom_headers",
+    "proxy",
+    "vars",
+    "interactsh_token",
+}
+PATH_FLAG_NAMES = {
+    "template_path",
+    "store_resp_dir",
+    "markdown_export",
+    "sarif_export",
+}
+
+
+def format_command_for_display(command):
+    return " ".join(_redact_command(command))
+
+
+def format_flag_value_for_display(flag, value):
+    if flag in SENSITIVE_FLAG_NAMES:
+        return "[redacted]"
+    if flag in PATH_FLAG_NAMES:
+        text = str(value or "")
+        return Path(text).name if text else ""
+    return str(value)
 
 # Ensure we're running on Linux
 if platform.system().lower() != "linux":
@@ -461,7 +492,7 @@ def run_scan(scan_type, target, **kwargs):
             if isinstance(value, bool) and value:
                 print(f"  + {flag}")
             elif not isinstance(value, bool):
-                display_value = str(value)
+                display_value = format_flag_value_for_display(flag, value)
                 if len(display_value) > 50:
                     display_value = display_value[:47] + "..."
                 print(f"  + {flag}: {display_value}")
@@ -654,7 +685,7 @@ def run_scan(scan_type, target, **kwargs):
     print(f"[TARGET]     {target}")
     print(f"[TOOL]       {scan_type}")
     print(f"[TIMESTAMP]  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"[COMMAND]    {' '.join(cmd)}")
+    print(f"[COMMAND]    {format_command_for_display(cmd)}")
     print(f"\n[CONFIGURATION]")
     print(f"  Real-time output: ENABLED")
     print(f"  Save to files:    {'ENABLED' if save_output else 'DISABLED'}")
@@ -667,7 +698,7 @@ def run_scan(scan_type, target, **kwargs):
             if isinstance(value, bool) and value:
                 print(f"  + {flag}")
             elif not isinstance(value, bool):
-                display_value = str(value)
+                display_value = format_flag_value_for_display(flag, value)
                 if len(display_value) > 50:
                     display_value = display_value[:47] + "..."
                 print(f"  + {flag}: {display_value}")
@@ -837,7 +868,7 @@ def run_scan(scan_type, target, **kwargs):
         print("=" * 80)
         print("[ERROR] workflow.py not found in src/ directory")
         print("[ACTION] Please ensure all toolkit files are present")
-        print("[COMMAND] " + " ".join(cmd))
+        print("[COMMAND] " + format_command_for_display(cmd))
         print("=" * 80)
         return False
         
@@ -846,7 +877,7 @@ def run_scan(scan_type, target, **kwargs):
         print("SCAN ERROR - UNEXPECTED FAILURE")
         print("=" * 80)
         print(f"[ERROR] {str(e)}")
-        print(f"[COMMAND] {' '.join(cmd)}")
+        print(f"[COMMAND] {format_command_for_display(cmd)}")
         print(f"[TIME] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
         return False

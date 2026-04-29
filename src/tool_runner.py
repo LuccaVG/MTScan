@@ -36,6 +36,10 @@ SECURITY_FINDING_SEVERITIES = {"critical", "high", "medium", "low"}
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
 SENSITIVE_COMMAND_VALUE_FLAGS = {
     "-H",
+    "-http-proxy",
+    "-interactsh-token",
+    "-proxy",
+    "-var",
     "--headers",
     "--custom-headers",
     "--proxy",
@@ -46,6 +50,9 @@ PATH_COMMAND_VALUE_FLAGS = {
     "-o",
     "-l",
     "-t",
+    "-markdown-export",
+    "-sarif-export",
+    "-store-resp-dir",
     "--template-path",
     "--markdown-export",
     "--sarif-export",
@@ -1897,11 +1904,17 @@ def run_chain(
     if not urls:
         urls = target_urls_for_nuclei(target)
     nuclei_targets = output_dir / "nuclei_targets.txt"
+    nuclei_target = None
+    nuclei_target_list = str(nuclei_targets)
+    if dry_run:
+        nuclei_target = urls[0] if urls else target
+        nuclei_target_list = None
     if not dry_run:
         _write_lines(nuclei_targets, urls)
 
     nuclei_cmd = build_nuclei_command(
-        target_list=str(nuclei_targets),
+        target=nuclei_target,
+        target_list=nuclei_target_list,
         templates=options.get("templates"),
         template_path=options.get("template_path"),
         tags=options.get("tags"),

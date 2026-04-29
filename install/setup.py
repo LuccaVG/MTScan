@@ -22,7 +22,7 @@ Requirements:
 - Linux operating system (Debian/Ubuntu/Kali/Arch)
 - Root privileges (sudo)
 - Internet connection
-- Python 3.6+
+- Python 3.8+
 
 ================================================================================
 """
@@ -374,8 +374,8 @@ def validate_system_requirements() -> Tuple[bool, Optional[str]]:
     print(f"{Colors.GREEN} Detected: {SUPPORTED_DISTROS[distro]['name']}{Colors.END}")
     
     # Check Python version
-    if sys.version_info < (3, 6):
-        print(f"{Colors.RED} Python 3.6+ required. Current: {sys.version}{Colors.END}")
+    if sys.version_info < (3, 8):
+        print(f"{Colors.RED} Python 3.8+ required. Current: {sys.version}{Colors.END}")
         return False, None
     print(f"{Colors.GREEN} Python version: {sys.version.split()[0]}{Colors.END}")
       # Check internet connectivity

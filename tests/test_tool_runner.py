@@ -223,6 +223,58 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertNotIn("secret-token", text)
         self.assertNotIn(str(output_dir), text)
 
+    def test_report_redacts_nuclei_short_form_sensitive_values(self):
+        output_dir = Path("tests") / "_redacted_nuclei_report_output"
+        output_dir.mkdir(exist_ok=True)
+        report = output_dir / tool_runner.REPORT_FILENAME
+
+        try:
+            tool_runner.write_vulnerability_report(
+                output_dir,
+                "https://example.com",
+                [
+                    tool_runner.ToolResult(
+                        tool="nuclei",
+                        command=[
+                            "/usr/local/bin/nuclei",
+                            "-u",
+                            "https://example.com",
+                            "-proxy",
+                            "http://user:secret-proxy@example.net:8080",
+                            "-interactsh-token",
+                            "secret-interactsh-token",
+                            "-var",
+                            "api_key=secret-variable",
+                            "-markdown-export",
+                            str(output_dir / "markdown"),
+                            "-sarif-export",
+                            str(output_dir / "nuclei.sarif"),
+                            "-store-resp-dir",
+                            str(output_dir / "responses"),
+                        ],
+                        success=True,
+                    )
+                ],
+            )
+            text = report.read_text(encoding="utf-8")
+        finally:
+            report.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertIn("-proxy [redacted]", text)
+        self.assertIn("-interactsh-token [redacted]", text)
+        self.assertIn("-var [redacted]", text)
+        self.assertIn("-markdown-export markdown", text)
+        self.assertIn("-sarif-export nuclei.sarif", text)
+        self.assertIn("-store-resp-dir responses", text)
+        self.assertNotIn("secret-proxy", text)
+        self.assertNotIn("secret-interactsh-token", text)
+        self.assertNotIn("secret-variable", text)
+        self.assertNotIn(str(output_dir), text)
+
     def test_run_chain_falls_back_to_original_target_when_naabu_has_no_targets(self):
         calls = []
 
@@ -268,6 +320,39 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertEqual(results[-1].tool, "nuclei")
         self.assertEqual(results[-1].command, [])
         self.assertTrue(results[-1].success)
+
+    def test_run_chain_dry_run_uses_direct_nuclei_target(self):
+        calls = []
+
+        def fake_run_command(tool, command, timeout=None, output_file=None, dry_run=False, on_line=None):
+            calls.append((tool, list(command), dry_run))
+            return tool_runner.ToolResult(
+                tool=tool,
+                command=list(command),
+                success=True,
+                returncode=0,
+                dry_run=dry_run,
+                output_file=Path(output_file) if output_file else None,
+            )
+
+        output_dir = Path("tests") / "_dry_chain_output"
+        try:
+            with patch.object(tool_runner, "get_executable_path", lambda tool: tool):
+                with patch.object(tool_runner, "run_command", fake_run_command):
+                    results = tool_runner.run_chain("example.com", output_dir=output_dir, dry_run=True)
+        finally:
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        nuclei_call = next(command for tool, command, _dry_run in calls if tool == "nuclei")
+
+        self.assertIn("-u", nuclei_call)
+        self.assertIn("http://example.com", nuclei_call)
+        self.assertNotIn("-l", nuclei_call)
+        self.assertTrue(all(dry_run for _tool, _command, dry_run in calls))
+        self.assertEqual([result.tool for result in results], ["naabu", "httpx", "nuclei"])
 
     def test_summarize_scan_results_counts_surface_and_findings(self):
         output_dir = Path("tests") / "_summary_output"

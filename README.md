@@ -159,6 +159,7 @@ Storage environment variables:
 
 - [docs/INSTALL.md](docs/INSTALL.md): installation and setup
 - [docs/USAGE.md](docs/USAGE.md): CLI, menu, web app, reports
+- [docs/MAINTAINER_GUIDE.md](docs/MAINTAINER_GUIDE.md): architecture, safety rules, verification, and change checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md): contribution rules and license terms
 - [SECURITY.md](SECURITY.md): security policy and responsible use
 - [docs/CODE_SCANNING.md](docs/CODE_SCANNING.md): GitHub code scanning pipeline

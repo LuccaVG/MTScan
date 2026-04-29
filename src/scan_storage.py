@@ -164,7 +164,7 @@ class FileScanStore:
         return records[: max(0, limit)]
 
     def get_scan(self, scan_id: str) -> Optional[Dict[str, object]]:
-        for record in self._read_records():
+        for record in reversed(self._read_records()):
             if record.get("id") == scan_id:
                 return record
         return None
@@ -322,6 +322,8 @@ class CassandraScanStore:
         return normalize_scan_record(data)
 
     def list_scans(self, limit: int = 100, target: Optional[str] = None) -> List[Dict[str, object]]:
+        if limit <= 0:
+            return []
         fetch_limit = max(1, min(limit * 5 if target else limit, 500))
         rows = self.session.execute(
             f"""
