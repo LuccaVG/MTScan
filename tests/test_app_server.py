@@ -80,6 +80,23 @@ class AppServerTests(unittest.TestCase):
         self.assertNotIn("C:\\Users", text)
         self.assertNotIn("/usr/local/bin", text)
 
+    def test_startup_tool_check_messages_report_missing_tools(self):
+        messages = app_server.startup_tool_check_messages(
+            {
+                "platform": "linux",
+                "tools": {
+                    "naabu": {"available": "yes", "detail": "naabu version"},
+                    "httpx": {"available": "no", "detail": "not found"},
+                    "nuclei": {"available": "yes", "detail": "nuclei version"},
+                },
+                "missing_tools": ["httpx"],
+            }
+        )
+
+        self.assertEqual(messages[0], "Checking scanner tools before starting web app...")
+        self.assertTrue(any("[MISSING] httpx: not found" in message for message in messages))
+        self.assertTrue(any("Missing scanner tools: httpx" in message for message in messages))
+
     def test_prune_jobs_keeps_recent_finished_jobs(self):
         old_jobs = app_server.JOBS.copy()
         try:

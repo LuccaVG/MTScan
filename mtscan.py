@@ -23,6 +23,7 @@ from typing import Callable, Optional, Union, cast
 FindingLinePredicate = Callable[[str], bool]
 SignalValue = Union[int, signal.Signals]
 KillpgFunction = Callable[[int, SignalValue], None]
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 _killpg = getattr(os, "killpg", None)
 _linux_killpg = cast(Optional[KillpgFunction], _killpg if callable(_killpg) else None)
@@ -37,7 +38,7 @@ def kill_process_group(pid: int, sig: SignalValue) -> None:
 SIGKILL: SignalValue = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 # Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # Try to import utils for tool detection
 try:
@@ -307,6 +308,29 @@ def print_tools_status():
         print(f"[PATH]    Ensure /usr/local/bin is in PATH: export PATH=$PATH:/usr/local/bin")
     
     print()
+
+
+def print_web_app_tool_preflight():
+    """Print scanner tool readiness before handing control to the web app."""
+    print("Checking scanner tools before starting web app...")
+    status = check_tools_status()
+    missing_tools = []
+
+    for tool, info in status.items():
+        if info['installed']:
+            print(f"  [OK]      {tool.upper():<8} Available")
+        else:
+            print(f"  [MISSING] {tool.upper():<8} Not found")
+            missing_tools.append(tool)
+
+    if missing_tools:
+        print(f"[WARNING] Missing tools: {', '.join(missing_tools)}")
+        print("[WARNING] The dashboard will open, but live scans need these tools installed.")
+        print("[ACTION]  Run option [7] to install or update tools.")
+    else:
+        print("[OK] All scanner tools are installed.")
+    print()
+
 
 def print_main_menu():
     """Print enhanced main menu with better formatting."""
@@ -2236,7 +2260,15 @@ def launch_web_app():
         input("Press Enter to continue...")
         return
 
-    cmd = [sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port)]
+    print_web_app_tool_preflight()
+
+    app_path = PROJECT_ROOT / "src" / "app_server.py"
+    if not app_path.is_file():
+        print(f"[ERROR] Could not find web app server at {app_path}")
+        input("Press Enter to continue...")
+        return
+
+    cmd = [sys.executable, "-u", str(app_path), "--host", host, "--port", str(port), "--skip-tool-check"]
     url = f"http://{host}:{port}"
     print()
     print(f"[APP] Starting MTScan web app at {url}")
@@ -2245,7 +2277,7 @@ def launch_web_app():
 
     process = None
     try:
-        process = subprocess.Popen(cmd, cwd=os.getcwd())
+        process = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
         return_code = process.wait()
         if return_code != 0:
             print(f"\n[APP] Web app exited with code {return_code}")

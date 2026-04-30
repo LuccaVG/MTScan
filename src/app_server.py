@@ -452,6 +452,36 @@ def health_payload() -> Dict[str, object]:
     return payload
 
 
+def startup_tool_check_messages(payload: Dict[str, object]) -> List[str]:
+    lines = ["Checking scanner tools before starting web app..."]
+    raw_tools = payload.get("tools")
+    tools = cast(Dict[str, Dict[str, object]], raw_tools) if isinstance(raw_tools, dict) else {}
+
+    for tool in tool_runner.SECURITY_TOOLS:
+        raw_info = tools.get(tool, {})
+        info = raw_info if isinstance(raw_info, dict) else {}
+        available = info.get("available") == "yes"
+        status = "OK" if available else "MISSING"
+        detail = str(info.get("detail") or ("available" if available else "not found"))
+        lines.append(f"  [{status}] {tool}: {detail}")
+
+    raw_missing = payload.get("missing_tools")
+    missing = [str(tool) for tool in raw_missing] if isinstance(raw_missing, list) else []
+    if payload.get("platform") != "linux":
+        lines.append("[WARN] Scanner execution requires a native Linux environment; dry runs and history can still be used.")
+    if missing:
+        lines.append(f"[WARN] Missing scanner tools: {', '.join(missing)}")
+        lines.append("[WARN] Install missing tools before running live scans.")
+    else:
+        lines.append("[OK] All scanner tools are installed.")
+    return lines
+
+
+def print_startup_tool_check() -> None:
+    for line in startup_tool_check_messages(health_payload()):
+        print(line, flush=True)
+
+
 def create_job(payload: Dict[str, object]) -> ScanJob:
     mode = str(payload.get("mode") or "chain").lower()
     if mode not in SCAN_MODES:
@@ -704,12 +734,23 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument("--allow-remote", action="store_true", help="Allow binding the app to a non-loopback interface")
+    parser.add_argument(
+        "--skip-tool-check",
+        action="store_true",
+        help="Skip the startup scanner tool check when the caller already performed it",
+    )
     args = parser.parse_args()
 
     if not args.allow_remote and not is_loopback_bind_host(args.host):
         raise SystemExit("Refusing non-loopback bind without --allow-remote.")
 
-    server = ThreadingHTTPServer((args.host, args.port), MTScanHandler)
+    if not args.skip_tool_check:
+        print_startup_tool_check()
+
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), MTScanHandler)
+    except OSError as exc:
+        raise SystemExit(f"Could not start MTScan app on {args.host}:{args.port}: {exc}") from exc
     allowed_hosts = {host.lower() for host in LOOPBACK_HOSTS}
     allowed_hosts.add(args.host.strip().strip("[]").lower())
     if args.allow_remote:
