@@ -14,9 +14,11 @@ import socket
 import re
 import ipaddress
 import urllib.parse
+import urllib.request
 import threading
 import signal
 import time
+import webbrowser
 from pathlib import Path
 from typing import Callable, Optional, Union, cast
 
@@ -2239,6 +2241,47 @@ def single_tool_scan_menu():
         return
 
 
+def wait_for_web_app(url, process, timeout=10):
+    """Wait briefly for the local app to answer before opening the browser."""
+    health_url = f"{url}/api/health"
+    deadline = time.monotonic() + timeout
+    last_error = None
+
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            print(f"[APP] Web app exited before it became ready (code {return_code}).")
+            return False
+
+        try:
+            with urllib.request.urlopen(health_url, timeout=1) as response:  # nosec B310
+                if response.status == 200:
+                    return True
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.25)
+
+    if last_error:
+        print(f"[APP] Server did not answer readiness check yet: {last_error}")
+    else:
+        print("[APP] Server did not answer readiness check yet.")
+    return False
+
+
+def open_web_app_in_browser(url):
+    """Open the dashboard when a graphical browser is available."""
+    try:
+        opened = webbrowser.open(url, new=2)
+    except Exception as exc:
+        print(f"[APP] Could not open browser automatically: {exc}")
+        opened = False
+
+    if opened:
+        print("[APP] Opened the dashboard in your browser.")
+    else:
+        print(f"[APP] Open this URL in Firefox: {url}")
+
+
 def launch_web_app():
     """Launch the local MTScan web app from the interactive menu."""
     clear_screen()
@@ -2250,7 +2293,7 @@ def launch_web_app():
     print()
 
     host = "127.0.0.1"
-    port_text = input("Port [8765]: ").strip() or "8765"
+    port_text = input("Port [8765] (press Enter): ").strip() or "8765"
     try:
         port = int(port_text)
         if port < 1 or port > 65535:
@@ -2278,6 +2321,11 @@ def launch_web_app():
     process = None
     try:
         process = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
+        if wait_for_web_app(url, process):
+            print(f"[APP] Ready at {url}")
+            open_web_app_in_browser(url)
+        else:
+            print(f"[APP] If the server is still running, try opening {url}")
         return_code = process.wait()
         if return_code != 0:
             print(f"\n[APP] Web app exited with code {return_code}")
