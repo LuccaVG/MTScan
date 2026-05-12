@@ -45,12 +45,23 @@
 
         <div class="two-column">
           <label class="field">
+            <span>Ports</span>
+            <input id="portsInput" name="ports" type="text" autocomplete="off" placeholder="80,443">
+          </label>
+          <label class="field">
             <span>Top Ports</span>
             <input id="topPortsInput" name="top_ports" type="number" min="1" max="65535" value="1000">
           </label>
+        </div>
+
+        <div class="two-column">
           <label class="field">
             <span>Timeout</span>
             <input id="timeoutInput" name="timeout" type="number" min="1" max="604800" value="900">
+          </label>
+          <label class="field">
+            <span>Tags</span>
+            <input id="tagsInput" name="tags" type="text" autocomplete="off" placeholder="cve,exposure">
           </label>
         </div>
 
@@ -62,6 +73,11 @@
             <option value="critical,high,medium">Critical to Medium</option>
             <option value="low,info">Low and Info</option>
           </select>
+        </label>
+
+        <label class="field">
+          <span>Templates</span>
+          <input id="templatesInput" name="templates" type="text" autocomplete="off" placeholder="cves/ or /path/template.yaml">
         </label>
 
         <div class="switch-row">
@@ -136,6 +152,7 @@
       <div class="tabs" role="tablist">
         <button class="tab active" type="button" data-tab="output">Output</button>
         <button class="tab" type="button" data-tab="findings">Results</button>
+        <button class="tab" type="button" data-tab="tools">Tools</button>
         <button class="tab" type="button" data-tab="files">Files</button>
       </div>
 
@@ -155,6 +172,22 @@
               </tr>
             </thead>
             <tbody id="findingsTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="toolsTab" class="tab-panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Status</th>
+                <th>Output</th>
+                <th>Command</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="toolsTable"></tbody>
           </table>
         </div>
       </section>

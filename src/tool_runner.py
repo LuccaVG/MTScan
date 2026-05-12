@@ -63,6 +63,7 @@ NUCLEI_TEXT_FINDING_PATTERN = re.compile(
 )
 CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
 CWE_PATTERN = re.compile(r"\bCWE-\d+\b", re.IGNORECASE)
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TARGET_FORBIDDEN_PATTERN = re.compile(r"[\x00-\x1f\x7f\s]")
 BARE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:\-\[\]/]+$")
 SEVERITY_FILTER_VALUES = SECURITY_FINDING_SEVERITIES | {"info", "unknown"}
@@ -233,6 +234,22 @@ def get_tool_help(tool_path: str) -> str:
     return ""
 
 
+def best_tool_detail(*outputs: object) -> Optional[str]:
+    lines: List[str] = []
+    for output in outputs:
+        for line in str(output or "").splitlines():
+            clean = ANSI_ESCAPE_PATTERN.sub("", line).strip()
+            if clean:
+                lines.append(clean)
+    for line in lines:
+        if "version" in line.lower():
+            return line
+    for line in lines:
+        if any(ch.isalnum() for ch in line):
+            return line
+    return None
+
+
 def verify_tool(tool_name: str) -> Tuple[bool, Optional[str], Optional[str]]:
     path = get_executable_path(tool_name)
     if not path:
@@ -248,8 +265,7 @@ def verify_tool(tool_name: str) -> Tuple[bool, Optional[str], Optional[str]]:
                 check=False,
             )
             if result.returncode == 0:
-                version = (result.stdout or result.stderr).strip().splitlines()
-                return True, path, version[0] if version else None
+                return True, path, best_tool_detail(result.stdout, result.stderr)
         except Exception:
             continue
     return False, path, "found but did not respond to version/help checks"
@@ -376,12 +392,12 @@ def validate_scan_options(options: Dict[str, object]) -> None:
 
     top_ports = options.get("top_ports")
     if top_ports not in (None, ""):
-        _coerce_int_option("top ports", top_ports, 1, 65535)
+        options["top_ports"] = _coerce_int_option("top ports", top_ports, 1, 65535)
 
     for name, (minimum, maximum) in POSITIVE_INTEGER_OPTIONS.items():
         value = options.get(name)
         if value not in (None, ""):
-            _coerce_int_option(name, value, minimum, maximum)
+            options[name] = _coerce_int_option(name, value, minimum, maximum)
 
     scan_type = options.get("scan_type")
     if scan_type not in (None, "", "syn", "connect"):
@@ -803,13 +819,16 @@ def run_command(
             timer.cancel()
         if process is not None:
             _stop_process(process, kill=True)
+        error = str(exc)
+        if isinstance(exc, PermissionError) and cmd and os.sep not in cmd[0] and shutil.which(cmd[0]) is None:
+            error = f"{cmd[0]} not found in PATH"
         return ToolResult(
             tool=tool,
             command=cmd,
             success=False,
             output_lines=output_lines,
             output_file=output_file,
-            error=str(exc),
+            error=error,
         )
 
 
@@ -918,6 +937,12 @@ def _preview_items(items: Sequence[str], limit: int = 8) -> str:
     if len(items) > limit:
         preview += f", ... {len(items) - limit} more"
     return preview or "none"
+
+
+def _skipped_result(tool: str, reason: str, on_line: Optional[Callable[[str], None]]) -> ToolResult:
+    message = f"[MTScan] Skipping {tool}: {reason}"
+    _emit_workflow_line(message, on_line)
+    return ToolResult(tool=tool, command=[], success=False, output_lines=[message], error=reason)
 
 
 def _saved_output_candidates(tool: str, output_dir: Path) -> List[Path]:
@@ -1468,6 +1493,7 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
     risk_label = _overall_risk_label(severity_counts)
     generated_at = _dt.datetime.now().isoformat(timespec="seconds")
     report = output_dir / REPORT_FILENAME
+    tools_run = {result.tool for result in results}
 
     lines = [
         "# MTScan Vulnerability Report",
@@ -1522,16 +1548,16 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
             ]
         )
 
-    lines.extend(
-        [
-            "## What Was Checked",
-            "",
-            "- `naabu` discovered exposed TCP services.",
-            "- `httpx` identified reachable HTTP and HTTPS services and collected web context.",
-            "- `nuclei` checked discovered HTTP targets for known vulnerabilities, exposures, and misconfigurations.",
-            "",
-        ]
-    )
+    lines.extend(["## What Was Checked", ""])
+    if "naabu" in tools_run:
+        lines.append("- `naabu` discovered exposed TCP services.")
+    if "httpx" in tools_run:
+        lines.append("- `httpx` identified reachable HTTP and HTTPS services and collected web context.")
+    if "nuclei" in tools_run:
+        lines.append("- `nuclei` checked HTTP targets for known vulnerabilities, exposures, and misconfigurations.")
+    if not tools_run:
+        lines.append("- No scanner execution metadata was available.")
+    lines.append("")
 
     if findings:
         lines.extend(
@@ -1654,26 +1680,33 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
     open_ports = cast(List[object], summary.get("open_port_targets") or [])
     http_urls = cast(List[object], summary.get("http_urls") or [])
     lines.extend(["## Exposure Context", ""])
-    if open_ports:
-        lines.append("Open ports discovered:")
-        for item in open_ports[:50]:
-            lines.append(f"- `{_markdown_cell(item)}`")
-        if len(open_ports) > 50:
-            lines.append(f"- ... {len(open_ports) - 50} more")
-        lines.append("")
-    else:
-        lines.append("No open ports were parsed from the saved naabu output.")
-        lines.append("")
+    if "naabu" in tools_run:
+        if open_ports:
+            lines.append("Open ports discovered:")
+            for item in open_ports[:50]:
+                lines.append(f"- `{_markdown_cell(item)}`")
+            if len(open_ports) > 50:
+                lines.append(f"- ... {len(open_ports) - 50} more")
+            lines.append("")
+        else:
+            lines.append("No open ports were parsed from the saved naabu output.")
+            lines.append("")
 
-    if http_urls:
-        lines.append("HTTP services discovered:")
-        for item in http_urls[:50]:
-            lines.append(f"- `{_markdown_cell(item)}`")
-        if len(http_urls) > 50:
-            lines.append(f"- ... {len(http_urls) - 50} more")
-        lines.append("")
-    else:
-        lines.append("No HTTP services were parsed from the saved httpx output.")
+    if "httpx" in tools_run:
+        if http_urls:
+            lines.append("HTTP services discovered:")
+            for item in http_urls[:50]:
+                lines.append(f"- `{_markdown_cell(item)}`")
+            if len(http_urls) > 50:
+                lines.append(f"- ... {len(http_urls) - 50} more")
+            lines.append("")
+        else:
+            lines.append("No HTTP services were parsed from the saved httpx output.")
+            lines.append("")
+
+    if "naabu" not in tools_run and "httpx" not in tools_run:
+        lines.append("Surface discovery was not part of this scan.")
+        lines.append(f"Scanner target: `{_markdown_cell(target)}`")
         lines.append("")
 
     lines.extend(
@@ -1867,6 +1900,12 @@ def run_chain(
         on_line=on_line,
     )
     results.append(naabu_result)
+    if not dry_run and not naabu_result.success:
+        reason = naabu_result.error or "naabu failed"
+        results.append(_skipped_result("httpx", f"naabu did not complete successfully ({reason})", on_line))
+        results.append(_skipped_result("nuclei", "httpx was skipped", on_line))
+        write_summary(output_dir, target, results)
+        return results
 
     naabu_lines = [] if dry_run else (_read_nonempty_lines(naabu_file) or naabu_result.output_lines)
     naabu_targets = sorted(set(_extract_naabu_targets(naabu_lines)))
@@ -1923,6 +1962,11 @@ def run_chain(
         on_line=on_line,
     )
     results.append(httpx_result)
+    if not dry_run and not httpx_result.success:
+        reason = httpx_result.error or "httpx failed"
+        results.append(_skipped_result("nuclei", f"httpx did not complete successfully ({reason})", on_line))
+        write_summary(output_dir, target, results)
+        return results
 
     httpx_lines = [] if dry_run else (_read_nonempty_lines(httpx_file) or httpx_result.output_lines)
     urls = sorted(set(_extract_http_urls(httpx_lines)))

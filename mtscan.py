@@ -2311,7 +2311,7 @@ def launch_web_app():
         input("Press Enter to continue...")
         return
 
-    cmd = [sys.executable, "-u", str(app_path), "--host", host, "--port", str(port), "--skip-tool-check"]
+    cmd = [sys.executable, "-u", str(app_path), "--host", host, "--port", str(port), "--skip-tool-check", "--no-browser"]
     url = f"http://{host}:{port}"
     print()
     print(f"[APP] Starting MTScan web app at {url}")

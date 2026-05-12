@@ -18,6 +18,7 @@ import re
 import threading
 import traceback
 import uuid
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
@@ -235,7 +236,7 @@ def public_error(value: object) -> Optional[str]:
 
 
 def sanitize_log_line(line: object) -> str:
-    text = str(line)
+    text = tool_runner.ANSI_ESCAPE_PATTERN.sub("", str(line))
     text = SECRET_VALUE_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", text)
     text = WINDOWS_PATH_PATTERN.sub("[path]", text)
     text = UNIX_PATH_PATTERN.sub("[path]", text)
@@ -482,6 +483,18 @@ def print_startup_tool_check() -> None:
         print(line, flush=True)
 
 
+def open_browser(url: str) -> None:
+    try:
+        opened = webbrowser.open(url, new=2)
+    except Exception as exc:
+        print(f"Could not open browser automatically: {exc}", flush=True)
+        opened = False
+    if opened:
+        print("Opened MTScan in your browser.", flush=True)
+    else:
+        print(f"Open this URL in your browser: {url}", flush=True)
+
+
 def create_job(payload: Dict[str, object]) -> ScanJob:
     mode = str(payload.get("mode") or "chain").lower()
     if mode not in SCAN_MODES:
@@ -704,7 +717,7 @@ class MTScanHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_security_headers()
         self.end_headers()
-        self.wfile.write(data)
+        self.safe_write(data)
 
     def send_security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -723,7 +736,13 @@ class MTScanHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.send_security_headers()
         self.end_headers()
-        self.wfile.write(payload)
+        self.safe_write(payload)
+
+    def safe_write(self, payload: bytes) -> None:
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def log_message(self, _format: str, *args: object) -> None: # type: ignore
         return
@@ -739,6 +758,7 @@ def main() -> None:
         action="store_true",
         help="Skip the startup scanner tool check when the caller already performed it",
     )
+    parser.add_argument("--no-browser", action="store_true", help="Do not try to open the dashboard automatically")
     args = parser.parse_args()
 
     if not args.allow_remote and not is_loopback_bind_host(args.host):
@@ -758,6 +778,8 @@ def main() -> None:
     server.allowed_hosts = allowed_hosts  # type: ignore[attr-defined]
     url = f"http://{args.host}:{args.port}"
     print(f"MTScan app listening at {url}")
+    if not args.no_browser:
+        open_browser(url)
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

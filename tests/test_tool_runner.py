@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Dict, List, cast
@@ -52,6 +53,15 @@ class ToolRunnerTests(unittest.TestCase):
 
         with self.assertRaises(tool_runner.ScanInputError):
             tool_runner.validate_scan_request("example.com", {"severity": "urgent"})
+
+    def test_scan_request_validation_coerces_numeric_options(self):
+        options = {"timeout": "30", "threads": "5", "top_ports": "100"}
+
+        tool_runner.validate_scan_request("127.0.0.1", options)
+
+        self.assertEqual(options["timeout"], 30)
+        self.assertEqual(options["threads"], 5)
+        self.assertEqual(options["top_ports"], 100)
 
     def test_default_output_dir_keeps_long_targets_short(self):
         long_target = "https://" + ("very-long-subdomain." * 40) + "example.com/path"
@@ -274,6 +284,109 @@ class ToolRunnerTests(unittest.TestCase):
         self.assertNotIn("REDACTMEINTERACTSH", text)
         self.assertNotIn("REDACTMEVARIABLE", text)
         self.assertNotIn(str(output_dir), text)
+
+    def test_single_tool_report_describes_only_tools_that_ran(self):
+        output_dir = Path("tests") / "_single_tool_report_output"
+        output_dir.mkdir(exist_ok=True)
+        report = output_dir / tool_runner.REPORT_FILENAME
+
+        try:
+            tool_runner.write_vulnerability_report(
+                output_dir,
+                "https://example.com",
+                [tool_runner.ToolResult(tool="nuclei", command=["nuclei"], success=True)],
+            )
+            text = report.read_text(encoding="utf-8")
+        finally:
+            report.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+
+        self.assertIn("`nuclei` checked HTTP targets", text)
+        self.assertIn("Surface discovery was not part of this scan.", text)
+        self.assertNotIn("`naabu` discovered", text)
+        self.assertNotIn("`httpx` identified", text)
+
+    def test_chain_stops_after_naabu_failure(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            lines: List[str] = []
+
+            def fake_run_command(tool, command, timeout=None, output_file=None, dry_run=False, on_line=None):
+                self.assertEqual(tool, "naabu")
+                return tool_runner.ToolResult(
+                    tool="naabu",
+                    command=list(command),
+                    success=False,
+                    returncode=127,
+                    output_file=output_file,
+                    error="exit code 127",
+                )
+
+            with patch("src.tool_runner.run_command", side_effect=fake_run_command) as mocked:
+                results = tool_runner.run_chain("127.0.0.1", output_dir=output_dir, save_output=True, on_line=lines.append)
+
+            self.assertEqual(mocked.call_count, 1)
+            self.assertEqual([result.tool for result in results], ["naabu", "httpx", "nuclei"])
+            self.assertFalse(results[0].success)
+            self.assertFalse(results[1].success)
+            self.assertFalse(results[2].success)
+            self.assertIn("naabu did not complete", results[1].error or "")
+            self.assertTrue((output_dir / tool_runner.REPORT_FILENAME).exists())
+
+    def test_chain_hands_discovered_targets_between_tools(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            calls = []
+            lines: List[str] = []
+
+            def fake_run_command(tool, command, timeout=None, output_file=None, dry_run=False, on_line=None):
+                calls.append((tool, list(command)))
+                if output_file:
+                    if tool == "naabu":
+                        output_file.write_text("127.0.0.1:8765\n", encoding="utf-8")
+                    elif tool == "httpx":
+                        output_file.write_text(json.dumps({"url": "http://127.0.0.1:8765"}) + "\n", encoding="utf-8")
+                    elif tool == "nuclei":
+                        output_file.write_text(
+                            json.dumps(
+                                {
+                                    "template-id": "CVE-2026-1000-test",
+                                    "matched-at": "http://127.0.0.1:8765",
+                                    "info": {
+                                        "name": "Test Finding",
+                                        "severity": "high",
+                                        "classification": {"cve-id": "CVE-2026-1000"},
+                                    },
+                                }
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                return tool_runner.ToolResult(tool=tool, command=list(command), success=True, output_file=output_file)
+
+            with patch("src.tool_runner.run_command", side_effect=fake_run_command):
+                results = tool_runner.run_chain(
+                    "127.0.0.1",
+                    output_dir=output_dir,
+                    save_output=True,
+                    json_output=True,
+                    on_line=lines.append,
+                )
+
+            summary = tool_runner.summarize_scan_results("127.0.0.1", results)
+
+            self.assertEqual([tool for tool, _command in calls], ["naabu", "httpx", "nuclei"])
+            self.assertIn("-l", calls[1][1])
+            self.assertIn(str(output_dir / "httpx_targets.txt"), calls[1][1])
+            self.assertIn("-l", calls[2][1])
+            self.assertIn(str(output_dir / "nuclei_targets.txt"), calls[2][1])
+            self.assertEqual(summary["open_ports"], 1)
+            self.assertEqual(summary["http_services"], 1)
+            self.assertEqual(summary["security_findings"], 1)
+            self.assertTrue((output_dir / tool_runner.REPORT_FILENAME).exists())
 
     def test_run_chain_falls_back_to_original_target_when_naabu_has_no_targets(self):
         calls = []
