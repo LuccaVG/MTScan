@@ -18,7 +18,6 @@ import re
 import threading
 import traceback
 import uuid
-import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
@@ -30,9 +29,11 @@ if __package__ in (None, ""):
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src import browser_opener
     from src import scan_storage
     from src import tool_runner
 else:
+    from . import browser_opener
     from . import scan_storage
     from . import tool_runner
 
@@ -427,6 +428,7 @@ def _fresh_health_payload() -> Dict[str, object]:
         "available": raw_storage.get("available"),
         "detail": sanitize_log_line(raw_storage.get("detail") or ""),
         "keyspace": raw_storage.get("keyspace"),
+        "imported_file_history": raw_storage.get("imported_file_history"),
     }
     return {
         "platform": "linux" if tool_runner.is_linux() else "non-linux",
@@ -484,11 +486,7 @@ def print_startup_tool_check() -> None:
 
 
 def open_browser(url: str) -> None:
-    try:
-        opened = webbrowser.open(url, new=2)
-    except Exception as exc:
-        print(f"Could not open browser automatically: {exc}", flush=True)
-        opened = False
+    opened = browser_opener.open_url(url)
     if opened:
         print("Opened MTScan in your browser.", flush=True)
     else:

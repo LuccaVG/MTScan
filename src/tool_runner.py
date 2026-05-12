@@ -645,6 +645,7 @@ def build_nuclei_command(
     interactsh_token: Optional[str] = None,
     markdown_export: Optional[str] = None,
     sarif_export: Optional[str] = None,
+    no_color: bool = True,
     extra_args: Optional[Sequence[str]] = None,
     tool_path: Optional[str] = None,
 ) -> List[str]:
@@ -694,6 +695,7 @@ def build_nuclei_command(
     _append_bool(cmd, "-jsonl", jsonl)
     _append_bool(cmd, "-csv", csv_output)
     _append_bool(cmd, "-silent", silent)
+    _append_bool(cmd, "-no-color", no_color)
 
     if extra_args:
         cmd.extend([str(arg) for arg in extra_args if str(arg)])
@@ -954,6 +956,150 @@ def _saved_output_candidates(tool: str, output_dir: Path) -> List[Path]:
     return list(dict.fromkeys(candidates))
 
 
+def cleanup_intermediate_outputs(output_dir: Path) -> None:
+    """Remove raw scanner artifacts after the single report has been written."""
+    candidates: List[Path] = []
+    for tool in SECURITY_TOOLS:
+        candidates.extend(_saved_output_candidates(tool, output_dir))
+    candidates.extend([output_dir / "httpx_targets.txt", output_dir / "nuclei_targets.txt"])
+
+    for path in dict.fromkeys(candidates):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _hydrate_result_lines_from_files(results: Sequence[ToolResult]) -> None:
+    """Keep parsed output available in memory before report-only cleanup."""
+    for result in results:
+        lines = _read_nonempty_lines(result.output_file)
+        if lines:
+            result.output_lines = lines
+
+
+def _clear_result_output_files(results: Sequence[ToolResult]) -> None:
+    for result in results:
+        result.output_file = None
+
+
+def _count_from_markdown_row(line: str, label: str) -> Optional[int]:
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    if len(cells) < 2 or cells[0].lower() != label.lower():
+        return None
+    try:
+        return int(cells[1].replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _markdown_backtick_value(line: str) -> Optional[str]:
+    match = re.match(r"^\s*-\s+`(?P<value>.+)`\s*$", line)
+    return match.group("value") if match else None
+
+
+def summarize_report_file(target: str, report: Path) -> Dict[str, object]:
+    """Recover high-level counts from a report-only result directory."""
+    summary: Dict[str, object] = {
+        "target": target,
+        "open_ports": 0,
+        "open_port_targets": [],
+        "http_services": 0,
+        "http_urls": [],
+        "findings_total": 0,
+        "security_findings": 0,
+        "observations": 0,
+        "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0},
+        "category_counts": {},
+        "cve_findings": 0,
+        "chart_data": _chart_data([], [], [], {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0}),
+        "tools": [],
+        "findings": [],
+    }
+
+    try:
+        lines = report.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return summary
+
+    open_ports: List[str] = []
+    http_urls: List[str] = []
+    severity_counts = cast(Dict[str, int], summary["severity_counts"])
+    category_counts: Dict[str, int] = {}
+    section = ""
+    heading = ""
+
+    for line in lines:
+        text = line.strip()
+        if text == "Open ports discovered:":
+            section = "open_ports"
+            continue
+        if text == "HTTP services discovered:":
+            section = "http_urls"
+            continue
+        if text.startswith("## "):
+            heading = text.removeprefix("## ").strip()
+            section = ""
+            continue
+
+        if section == "open_ports":
+            value = _markdown_backtick_value(text)
+            if value:
+                open_ports.append(value)
+            continue
+        if section == "http_urls":
+            value = _markdown_backtick_value(text)
+            if value:
+                http_urls.append(value)
+            continue
+
+        for metric, key in (
+            ("Open ports", "open_ports"),
+            ("HTTP services", "http_services"),
+            ("Security findings", "security_findings"),
+            ("Informational observations", "observations"),
+        ):
+            count = _count_from_markdown_row(text, metric)
+            if count is not None:
+                summary[key] = count
+
+        for severity in ("Critical", "High", "Medium", "Low", "Info"):
+            count = _count_from_markdown_row(text, severity)
+            if count is not None:
+                severity_counts[severity.lower()] = count
+
+        cells = [cell.strip() for cell in text.strip("|").split("|")]
+        if heading == "Finding Breakdown" and len(cells) == 2 and cells[0] not in {"---", "Category"}:
+            try:
+                category_counts[cells[0]] = int(cells[1].replace(",", ""))
+            except ValueError:
+                pass
+
+    if open_ports:
+        summary["open_port_targets"] = open_ports
+        if not summary.get("open_ports"):
+            summary["open_ports"] = len(open_ports)
+    if http_urls:
+        summary["http_urls"] = http_urls
+        if not summary.get("http_services"):
+            summary["http_services"] = len(http_urls)
+
+    summary["category_counts"] = category_counts
+    findings_total = int(summary.get("security_findings") or 0) + int(summary.get("observations") or 0)
+    summary["findings_total"] = findings_total
+    summary["chart_data"] = {
+        "severity": severity_counts,
+        "surface": {
+            "open_ports": int(summary.get("open_ports") or 0),
+            "http_services": int(summary.get("http_services") or 0),
+            "findings": findings_total,
+        },
+        "categories": category_counts,
+        "cve_findings": 0,
+    }
+    return summary
+
+
 def summarize_saved_outputs(target: str, output_dir: Path) -> Dict[str, object]:
     """Summarize conventional scanner output files from a completed result directory."""
     results: List[ToolResult] = []
@@ -963,6 +1109,10 @@ def summarize_saved_outputs(target: str, output_dir: Path) -> Dict[str, object]:
             continue
         output_file = max(existing, key=lambda path: path.stat().st_mtime)
         results.append(ToolResult(tool=tool, command=[], success=True, output_file=output_file))
+    if not results:
+        report = output_dir / REPORT_FILENAME
+        if report.exists():
+            return summarize_report_file(target, report)
     return summarize_scan_results(target, results)
 
 
@@ -1093,7 +1243,7 @@ def _normalize_finding(data: Dict[str, object]) -> Dict[str, object]:
 
 def nuclei_finding_severity(line: str) -> Optional[str]:
     """Return nuclei result severity for actual findings, excluding status logs."""
-    text = line.strip()
+    text = ANSI_ESCAPE_PATTERN.sub("", line).strip()
     if not text:
         return None
 
@@ -1176,49 +1326,55 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
             return []
 
     try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            text = line.strip()
-            if not text:
-                continue
-            if text.startswith("{"):
-                try:
-                    data = json.loads(text)
-                    if isinstance(data, dict):
-                        finding = _normalize_finding(data)
-                        if str(finding.get("severity") or "").lower() in NUCLEI_FINDING_SEVERITIES:
-                            if finding.get("template_id") != "N/A" and finding.get("matched_at") != "N/A":
-                                findings.append(finding)
-                        continue
-                except json.JSONDecodeError:
-                    pass
-            match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
-            if match:
-                severity = match.group("severity").lower()
-                if severity not in NUCLEI_FINDING_SEVERITIES:
-                    continue
-                template = match.group("template")
-                cves = _extract_cves(template)
-                cwes = _extract_cwes(template)
-                findings.append(
-                    {
-                        "name": template,
-                        "severity": severity,
-                        "template_id": template,
-                        "matched_at": match.group("matched"),
-                        "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
-                        "impact": "",
-                        "remediation": "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
-                        "references": [],
-                        "cve": cves,
-                        "cwe": cwes,
-                        "category": _finding_category_from_parts(template, cves),
-                        "tags": [],
-                        "matcher_name": "",
-                        "extracted_results": [],
-                    }
-                )
+        findings.extend(parse_nuclei_finding_lines(path.read_text(encoding="utf-8", errors="ignore").splitlines()))
     except OSError:
         return []
+    return findings
+
+
+def parse_nuclei_finding_lines(lines: Iterable[str]) -> List[Dict[str, object]]:
+    findings: List[Dict[str, object]] = []
+    for line in lines:
+        text = ANSI_ESCAPE_PATTERN.sub("", line).strip()
+        if not text:
+            continue
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    finding = _normalize_finding(data)
+                    if str(finding.get("severity") or "").lower() in NUCLEI_FINDING_SEVERITIES:
+                        if finding.get("template_id") != "N/A" and finding.get("matched_at") != "N/A":
+                            findings.append(finding)
+                    continue
+            except json.JSONDecodeError:
+                pass
+        match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
+        if match:
+            severity = match.group("severity").lower()
+            if severity not in NUCLEI_FINDING_SEVERITIES:
+                continue
+            template = match.group("template")
+            cves = _extract_cves(template)
+            cwes = _extract_cwes(template)
+            findings.append(
+                {
+                    "name": template,
+                    "severity": severity,
+                    "template_id": template,
+                    "matched_at": match.group("matched"),
+                    "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
+                    "impact": "",
+                    "remediation": "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
+                    "references": [],
+                    "cve": cves,
+                    "cwe": cwes,
+                    "category": _finding_category_from_parts(template, cves),
+                    "tags": [],
+                    "matcher_name": "",
+                    "extracted_results": [],
+                }
+            )
     return findings
 
 
@@ -1430,6 +1586,8 @@ def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[s
 
     nuclei_result = by_tool.get("nuclei")
     findings = parse_nuclei_findings(nuclei_result.output_file if nuclei_result else None)
+    if not findings and nuclei_result:
+        findings = parse_nuclei_finding_lines(nuclei_result.output_lines)
     severity_counts = _severity_counts(findings)
     security_findings = [
         finding for finding in findings
@@ -1713,15 +1871,14 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
         [
             "## Tool Execution",
             "",
-            "| Tool | Status | Output file | Notes |",
-            "|---|---|---|---|",
+            "| Tool | Status | Notes |",
+            "|---|---|---|",
         ]
     )
     for result in results:
         status = "success" if result.success else "failed"
-        output_file = _markdown_cell(_public_path_value(result.output_file) or "N/A")
         note = _markdown_cell(result.error or f"{len(result.output_lines)} streamed lines")
-        lines.append(f"| `{result.tool}` | {status} | `{output_file}` | {note} |")
+        lines.append(f"| `{result.tool}` | {status} | {note} |")
 
     lines.extend(["", "## Commands", ""])
     for result in results:
@@ -1749,7 +1906,11 @@ def write_security_findings_report(output_dir: Path, target: str, results: Seque
 
 def write_summary(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
     """Compatibility wrapper for older callers; writes the single report."""
-    return write_vulnerability_report(output_dir, target, results)
+    _hydrate_result_lines_from_files(results)
+    report = write_vulnerability_report(output_dir, target, results)
+    cleanup_intermediate_outputs(output_dir)
+    _clear_result_output_files(results)
+    return report
 
 
 def target_urls_for_nuclei(target: str) -> List[str]:

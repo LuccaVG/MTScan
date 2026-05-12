@@ -1,0 +1,17 @@
+id: mtscan-local-medium
+
+info:
+  name: MTScan Local Medium Test Finding
+  author: mtscan
+  severity: medium
+  description: Local loopback-only marker used to validate medium severity reporting.
+  tags: mtscan,test,severity
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/mtscan-medium"
+    matchers:
+      - type: word
+        words:
+          - "MTSCAN_TEST_MEDIUM"

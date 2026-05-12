@@ -79,9 +79,9 @@ python3 mtscan.py
 
 Main choices:
 
-- `[1] Complete CLI Scan Chain`: runs `naabu -> httpx -> nuclei`
-- `[2] Single Tool CLI Scan`: opens a submenu for `naabu`, `httpx`, or `nuclei`
-- `[3] Launch Local Web App`: starts the dashboard on localhost
+- `[1] Launch Local Web App`: starts the dashboard on localhost with persisted history
+- `[2] Complete CLI Scan Chain`: runs `naabu -> httpx -> nuclei`
+- `[3] Single Tool CLI Scan`: opens a submenu for `naabu`, `httpx`, or `nuclei`
 - `[4] View Previous Results`: opens saved `results_*` folders
 - `[5] Update Nuclei Templates`: runs nuclei template update
 - `[7] Install/Update Tools`: updates scanner binaries or reruns setup tasks
@@ -157,9 +157,12 @@ export MTSCAN_STORAGE_BACKEND=auto
 Use Cassandra when available:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 python3 src/app_server.py
 ```
+
+From the interactive menu, option `[1] Launch Local Web App` checks the native
+Cassandra service and uses it when `cassandra-driver` can connect.
 
 Use file storage:
 
@@ -194,13 +197,29 @@ Check scanner availability:
 python3 src/workflow.py --check-tools
 ```
 
+Safe local severity validation:
+
+```bash
+python3 tests/fixtures/local_vuln_server.py --host 127.0.0.1 --port 8899
+```
+
+In another terminal:
+
+```bash
+python3 src/workflow.py --all -host 127.0.0.1 --ports 8899 --save-output --json-output --skip-network-check --template-path tests/fixtures/nuclei-local-severity --no-interactsh
+```
+
+This fixture binds only to loopback and serves static markers, not a real
+vulnerable application. Expected report counts are 4 security findings
+(`critical`, `high`, `medium`, `low`) and 1 informational observation.
+
 ## Português do Brasil
 
 O MTScan tem três caminhos principais de uso:
 
-- Opção `[1]` no `mtscan.py`: cadeia CLI completa
-- Opção `[2]` no `mtscan.py`: varredura CLI com uma única ferramenta
-- Opção `[3]` no `mtscan.py`: aplicação web local
+- Opção `[1]` no `mtscan.py`: aplicação web local
+- Opção `[2]` no `mtscan.py`: cadeia CLI completa
+- Opção `[3]` no `mtscan.py`: varredura CLI com uma única ferramenta
 
 O menu, o CLI direto e a aplicação usam o mesmo runner, mantendo saída e
 relatórios consistentes.
@@ -271,9 +290,9 @@ python3 mtscan.py
 
 Opções principais:
 
-- `[1] Complete CLI Scan Chain`: executa `naabu -> httpx -> nuclei`
-- `[2] Single Tool CLI Scan`: abre submenu para `naabu`, `httpx` ou `nuclei`
-- `[3] Launch Local Web App`: inicia o painel em localhost
+- `[1] Launch Local Web App`: inicia o painel em localhost com histórico persistente
+- `[2] Complete CLI Scan Chain`: executa `naabu -> httpx -> nuclei`
+- `[3] Single Tool CLI Scan`: abre submenu para `naabu`, `httpx` ou `nuclei`
 - `[4] View Previous Results`: abre pastas `results_*`
 - `[5] Update Nuclei Templates`: atualiza templates do nuclei
 - `[7] Install/Update Tools`: atualiza binários ou tarefas de setup
@@ -331,9 +350,12 @@ export MTSCAN_STORAGE_BACKEND=auto
 Cassandra:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 python3 src/app_server.py
 ```
+
+No menu interativo, a opção `[1] Launch Local Web App` verifica o serviço
+nativo do Cassandra e o usa quando `cassandra-driver` consegue conectar.
 
 Arquivo local:
 

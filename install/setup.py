@@ -38,6 +38,7 @@ import ctypes
 import urllib.request
 import signal
 import tempfile
+import socket
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union, cast
 
@@ -93,6 +94,14 @@ SUPPORTED_DISTROS = {
 }
 
 HTTPX_BINARY_NAMES = ["httpx-toolkit", "httpx"]
+CASSANDRA_APT_SERIES = os.environ.get("MTSCAN_CASSANDRA_APT_SERIES", "50x")
+CASSANDRA_APT_SOURCE = (
+    f"deb [signed-by=/etc/apt/keyrings/apache-cassandra.asc] "
+    f"https://debian.cassandra.apache.org {CASSANDRA_APT_SERIES} main"
+)
+CASSANDRA_APT_SOURCE_FILE = Path("/etc/apt/sources.list.d/cassandra.sources.list")
+CASSANDRA_APT_KEYRING = Path("/etc/apt/keyrings/apache-cassandra.asc")
+CASSANDRA_APT_KEY_URL = "https://downloads.apache.org/cassandra/KEYS"
 
 
 def binary_names_for_tool(tool: str) -> List[str]:
@@ -520,17 +529,14 @@ def run_with_timeout(cmd: List[str], timeout_seconds: int = 300, description: st
 
 def find_pip_command() -> Optional[List[str]]:
     """Return a usable pip command without assuming it is named exactly pip."""
-    candidates: List[List[str]] = []
+    candidates: List[List[str]] = [
+        [sys.executable, "-m", "pip"],
+        ["python3", "-m", "pip"],
+    ]
     for executable in ("pip3", "pip"):
         path = shutil.which(executable)
         if path:
             candidates.append([path])
-    candidates.extend(
-        [
-            [sys.executable, "-m", "pip"],
-            ["python3", "-m", "pip"],
-        ]
-    )
 
     seen = set()
     for command in candidates:
@@ -580,6 +586,69 @@ def create_and_activate_python_venv() -> bool:
                     f.write(f"# {activation_cmd}\n")
 
     return find_pip_command() is not None
+
+
+def runtime_python_imports(module: str) -> bool:
+    """Return True when the Python used to launch MTScan can import a module."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def tcp_port_open(host: str = "127.0.0.1", port: int = 9042, timeout: float = 1.0) -> bool:
+    """Return True when a TCP endpoint accepts a connection."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_cassandra(timeout_seconds: int = 120) -> bool:
+    """Wait for the local native Cassandra service to expose CQL."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if tcp_port_open():
+            return True
+        time.sleep(2)
+    return False
+
+
+def cassandra_service_active() -> bool:
+    """Return True when the native Cassandra service reports active."""
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "cassandra"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def install_package_candidates(distro: str, candidates: List[List[str]], description: str) -> bool:
+    """Try package candidate groups until one installs successfully."""
+    if distro not in SUPPORTED_DISTROS:
+        return False
+    distro_config = SUPPORTED_DISTROS[distro]
+    for packages in candidates:
+        install_cmd = list(distro_config["install_cmd"]) + packages
+        if run_with_timeout(install_cmd, 300, f"Installing {description}: {', '.join(packages)}"):
+            return True
+    return False
 
 def fix_package_locks() -> bool:
     """Fix common package manager lock issues with enhanced safety and longer timeouts."""
@@ -1417,27 +1486,26 @@ def install_python_dependencies() -> bool:
         
         if os.path.exists(requirements_file):
             print(f"{Colors.WHITE}Installing Python dependencies from requirements.txt...{Colors.END}")
-            result = subprocess.run(
+            install_attempts = [
                 pip_cmd + ['install', '-r', requirements_file],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            if result.returncode != 0 and "externally-managed" in (result.stderr or "").lower():
-                print(f"{Colors.YELLOW} System Python is externally managed; installing dependencies in a virtual environment.{Colors.END}")
-                if not create_and_activate_python_venv():
-                    return False
-                pip_cmd = find_pip_command()
-                if not pip_cmd:
-                    return False
+                pip_cmd + ['install', '--break-system-packages', '-r', requirements_file],
+            ]
+            result = None
+            for command in install_attempts:
                 result = subprocess.run(
-                    pip_cmd + ['install', '-r', requirements_file],
+                    command,
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                if result.returncode == 0:
+                    break
+                if "--break-system-packages" not in command and "externally-managed" in (result.stderr or "").lower():
+                    print(f"{Colors.YELLOW} System Python is externally managed; retrying with --break-system-packages for MTScan runtime deps.{Colors.END}")
+                    continue
+                if "--break-system-packages" not in command:
+                    break
             if result.returncode != 0:
                 print(f"{Colors.RED} Python dependencies installation failed with {format_command(pip_cmd)}{Colors.END}")
                 if result.stderr:
@@ -1454,10 +1522,92 @@ def install_python_dependencies() -> bool:
             for package in essential_packages:
                 subprocess.run(pip_cmd + ['install', package], check=True, stdout=subprocess.DEVNULL)
                 print(f"{Colors.GREEN}   {package}{Colors.END}")
-            
+
+        if not runtime_python_imports("cassandra.cluster"):
+            print(f"{Colors.RED} cassandra-driver is not importable by {sys.executable}{Colors.END}")
+            print(f"{Colors.WHITE}The web app needs this dependency for Cassandra-backed scan history.{Colors.END}")
+            return False
+
+        print(f"{Colors.GREEN} Python runtime dependencies verified{Colors.END}")
         return True
     except Exception as e:
         print(f"{Colors.RED} Python dependencies installation failed: {e}{Colors.END}")
+        return False
+
+
+def write_cassandra_apt_source() -> bool:
+    """Install Apache Cassandra APT source metadata for native service installs."""
+    try:
+        CASSANDRA_APT_KEYRING.parent.mkdir(parents=True, exist_ok=True)
+        if not CASSANDRA_APT_KEYRING.exists():
+            print(f"{Colors.WHITE}Downloading Apache Cassandra repository key...{Colors.END}")
+            with urllib.request.urlopen(CASSANDRA_APT_KEY_URL, timeout=60) as response:
+                CASSANDRA_APT_KEYRING.write_bytes(response.read())
+            CASSANDRA_APT_KEYRING.chmod(0o644)
+
+        existing = ""
+        if CASSANDRA_APT_SOURCE_FILE.exists():
+            existing = CASSANDRA_APT_SOURCE_FILE.read_text(encoding="utf-8", errors="ignore")
+        if CASSANDRA_APT_SOURCE not in existing:
+            CASSANDRA_APT_SOURCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with CASSANDRA_APT_SOURCE_FILE.open("a", encoding="utf-8") as handle:
+                if existing and not existing.endswith("\n"):
+                    handle.write("\n")
+                handle.write(CASSANDRA_APT_SOURCE + "\n")
+        print(f"{Colors.GREEN} Cassandra APT source configured ({CASSANDRA_APT_SERIES}){Colors.END}")
+        return True
+    except Exception as exc:
+        print(f"{Colors.RED} Cassandra APT source setup failed: {exc}{Colors.END}")
+        return False
+
+
+def install_cassandra_service(distro: str) -> bool:
+    """Install Java and Apache Cassandra as a native system service."""
+    try:
+        print(f"\n{Colors.BLUE} Installing native Cassandra service for web history storage{Colors.END}")
+
+        if distro not in {"debian", "ubuntu", "kali"}:
+            print(f"{Colors.RED} Native Cassandra auto-install is currently supported for apt-based systems only.{Colors.END}")
+            print(f"{Colors.WHITE}Install Cassandra manually, then ensure 127.0.0.1:9042 is reachable.{Colors.END}")
+            return False
+
+        java_candidates = [
+            ["openjdk-17-jre-headless"],
+            ["default-jre-headless"],
+            ["default-jre"],
+        ]
+        if not install_package_candidates(distro, java_candidates, "Java runtime for Cassandra"):
+            print(f"{Colors.RED} Could not install a Java runtime for Cassandra{Colors.END}")
+            return False
+
+        if not write_cassandra_apt_source():
+            return False
+        if not run_with_timeout(["apt", "update"], 300, "Updating package index with Cassandra repository"):
+            return False
+        if not run_with_timeout(["apt", "install", "-y", "cassandra"], 600, "Installing Apache Cassandra service"):
+            return False
+
+        if shutil.which("systemctl"):
+            if not run_with_timeout(["systemctl", "enable", "--now", "cassandra"], 180, "Enabling Cassandra service"):
+                print(f"{Colors.YELLOW} systemctl could not start Cassandra; trying service command.{Colors.END}")
+                run_with_timeout(["service", "cassandra", "start"], 180, "Starting Cassandra service")
+        elif shutil.which("service"):
+            run_with_timeout(["service", "cassandra", "start"], 180, "Starting Cassandra service")
+
+        print(f"{Colors.WHITE}Waiting for Cassandra CQL on 127.0.0.1:9042...{Colors.END}")
+        if wait_for_cassandra(timeout_seconds=180):
+            print(f"{Colors.GREEN} Cassandra is reachable on 127.0.0.1:9042{Colors.END}")
+            return True
+
+        if cassandra_service_active():
+            print(f"{Colors.YELLOW} Cassandra service is active but CQL is still warming up.{Colors.END}")
+            print(f"{Colors.WHITE}Check with: systemctl status cassandra && journalctl -u cassandra -n 80{Colors.END}")
+            return True
+
+        print(f"{Colors.RED} Cassandra service did not become reachable on 127.0.0.1:9042{Colors.END}")
+        return False
+    except Exception as e:
+        print(f"{Colors.RED} Cassandra service installation failed: {e}{Colors.END}")
         return False
 
 def setup_python_environment() -> bool:
@@ -1631,6 +1781,20 @@ def final_verification() -> bool:
                 print(f"{Colors.YELLOW}    httpx: Version check failed{Colors.END}")
         else:
             print(f"{Colors.YELLOW}    httpx: Not found for testing{Colors.END}")
+
+        if runtime_python_imports("cassandra.cluster"):
+            print(f"{Colors.GREEN}   cassandra-driver: Available to {sys.executable}{Colors.END}")
+        else:
+            print(f"{Colors.RED}   cassandra-driver: Not importable by {sys.executable}{Colors.END}")
+            all_good = False
+
+        if tcp_port_open():
+            print(f"{Colors.GREEN}   Cassandra service: Reachable on 127.0.0.1:9042{Colors.END}")
+        elif cassandra_service_active():
+            print(f"{Colors.YELLOW}   Cassandra service: Active, CQL not ready yet{Colors.END}")
+        else:
+            print(f"{Colors.RED}   Cassandra service: Not reachable on 127.0.0.1:9042{Colors.END}")
+            all_good = False
         
         # Enhanced success criteria - if tools are found even if not in PATH, consider it success
         tools_found = 0
@@ -1638,14 +1802,14 @@ def final_verification() -> bool:
             if find_scanner_binary(tool):
                 tools_found += 1
         
-        if tools_found >= 2:  # At least 2 out of 3 tools found
-            print(f"{Colors.GREEN} Verification passed: {tools_found}/3 tools found{Colors.END}")
-            if tools_found < 3:
-                print(f"{Colors.YELLOW} Re-run setup or check /usr/local/bin permissions.{Colors.END}")
+        if tools_found == 3 and all_good:
+            print(f"{Colors.GREEN} Verification passed: {tools_found}/3 scanner tools found and runtime dependencies available{Colors.END}")
             return True
+        if tools_found < 3:
+            print(f"{Colors.RED} Insufficient scanner tools found: {tools_found}/3{Colors.END}")
         else:
-            print(f"{Colors.RED} Insufficient tools found: {tools_found}/3{Colors.END}")
-            return False
+            print(f"{Colors.RED} Runtime dependency verification failed. Check messages above.{Colors.END}")
+        return False
         
     except Exception as e:
         print(f"{Colors.RED} Verification failed: {e}{Colors.END}")
@@ -1740,6 +1904,7 @@ def main():
             ("Minimal System Packages", lambda: install_system_packages(distro_config)),
             ("Python Environment Setup", setup_python_environment),
             ("Python Dependencies", install_python_dependencies),
+            ("Native Cassandra Service", lambda: install_cassandra_service(distro)),
             ("Go Environment", setup_go_environment_complete),
             ("Security Tools", lambda: install_security_tools_complete(distro)),
             ("Configuration", create_configuration_files),

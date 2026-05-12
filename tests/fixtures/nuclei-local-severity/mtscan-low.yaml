@@ -1,0 +1,17 @@
+id: mtscan-local-low
+
+info:
+  name: MTScan Local Low Test Finding
+  author: mtscan
+  severity: low
+  description: Local loopback-only marker used to validate low severity reporting.
+  tags: mtscan,test,severity
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/mtscan-low"
+    matchers:
+      - type: word
+        words:
+          - "MTSCAN_TEST_LOW"

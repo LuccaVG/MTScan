@@ -49,7 +49,9 @@ sudo python3 install/setup.py
 ```
 
 The installer exposes Go-installed scanner binaries through `/usr/local/bin`
-when it has sudo privileges. If your shell cannot find the tools after install:
+when it has sudo privileges, installs Python runtime dependencies from
+`config/requirements.txt`, and installs a native Cassandra service for local
+scan history. If your shell cannot find the tools after install:
 
 ```bash
 export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
@@ -95,9 +97,9 @@ python3 mtscan.py
 
 Current menu flow:
 
-- `[1]` Complete CLI Scan Chain
-- `[2]` Single Tool CLI Scan
-- `[3]` Launch Local Web App
+- `[1]` Launch Local Web App
+- `[2]` Complete CLI Scan Chain
+- `[3]` Single Tool CLI Scan
 - `[4]` View Previous Results
 - `[5]` Update Nuclei Templates
 - `[6]` Tool Configuration
@@ -123,6 +125,11 @@ http://127.0.0.1:8765
 The app uses the shared Python scanner runner. It includes live logs, scan
 history, result summaries, and graphs for findings and exposed surface.
 
+Safe local severity validation fixtures live in `tests/fixtures/`. They bind to
+`127.0.0.1` only and use static markers so release testing can exercise
+critical, high, medium, low, and info report paths without exposing a real
+vulnerable service.
+
 The app is intentionally local-first:
 
 - Binds to `127.0.0.1` by default
@@ -136,12 +143,13 @@ The app is intentionally local-first:
 
 The web app stores completed scan summaries for graph history. It tries
 Cassandra first and falls back to a local JSONL file if Cassandra is not
-available.
+available. Menu option `[1]` checks the native Cassandra service, then starts
+the dashboard.
 
 Optional local Cassandra:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 python3 src/app_server.py
 ```
 
@@ -216,7 +224,9 @@ Na raiz do projeto:
 sudo python3 install/setup.py
 ```
 
-Se o shell não encontrar as ferramentas depois da instalação:
+O instalador também instala dependências Python de runtime e um serviço nativo
+do Cassandra para o histórico local. Se o shell não encontrar as
+ferramentas depois da instalação:
 
 ```bash
 export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
@@ -257,7 +267,7 @@ se o Cassandra não estiver disponível.
 Subir Cassandra local:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 python3 src/app_server.py
 ```
 

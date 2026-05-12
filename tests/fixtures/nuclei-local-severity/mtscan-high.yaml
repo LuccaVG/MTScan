@@ -1,0 +1,17 @@
+id: mtscan-local-high
+
+info:
+  name: MTScan Local High Test Finding
+  author: mtscan
+  severity: high
+  description: Local loopback-only marker used to validate high severity reporting.
+  tags: mtscan,test,severity
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/mtscan-high"
+    matchers:
+      - type: word
+        words:
+          - "MTSCAN_TEST_HIGH"

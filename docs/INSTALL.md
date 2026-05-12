@@ -28,6 +28,7 @@ The installer:
 - Checks Linux system requirements
 - Installs required OS packages where possible
 - Installs Python dependencies from `config/requirements.txt`
+- Installs Java and Apache Cassandra as a native service for local scan history
 - Installs or updates `naabu`, `httpx`, and `nuclei`
 - Exposes scanner binaries through `/usr/local/bin` when sudo is available
 - Updates nuclei templates when nuclei is installed
@@ -65,10 +66,10 @@ Expected scanners:
 
 ## Optional Local Cassandra
 
-Start Cassandra for persistent web app graph history:
+Start the native Cassandra service for persistent web app graph history:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 ```
 
 Then start the app:
@@ -164,6 +165,7 @@ O instalador:
 - Verifica requisitos do Linux
 - Instala pacotes do sistema quando possível
 - Instala dependências Python de `config/requirements.txt`
+- Instala Java e Apache Cassandra como serviço nativo para histórico local
 - Instala ou atualiza `naabu`, `httpx` e `nuclei`
 - Expõe binários em `/usr/local/bin` quando há sudo
 - Atualiza templates do nuclei quando o nuclei está instalado
@@ -201,10 +203,10 @@ Ferramentas esperadas:
 
 ## Cassandra Local Opcional
 
-Suba o Cassandra para histórico persistente dos gráficos:
+Inicie o serviço nativo do Cassandra para histórico persistente dos gráficos:
 
 ```bash
-docker compose -f docker-compose.cassandra.yml up -d
+sudo systemctl enable --now cassandra
 ```
 
 Depois inicie a aplicação:
