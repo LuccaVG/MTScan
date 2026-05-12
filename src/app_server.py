@@ -29,9 +29,11 @@ if __package__ in (None, ""):
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src import browser_opener
     from src import scan_storage
     from src import tool_runner
 else:
+    from . import browser_opener
     from . import scan_storage
     from . import tool_runner
 
@@ -235,7 +237,7 @@ def public_error(value: object) -> Optional[str]:
 
 
 def sanitize_log_line(line: object) -> str:
-    text = str(line)
+    text = tool_runner.ANSI_ESCAPE_PATTERN.sub("", str(line))
     text = SECRET_VALUE_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", text)
     text = WINDOWS_PATH_PATTERN.sub("[path]", text)
     text = UNIX_PATH_PATTERN.sub("[path]", text)
@@ -426,6 +428,7 @@ def _fresh_health_payload() -> Dict[str, object]:
         "available": raw_storage.get("available"),
         "detail": sanitize_log_line(raw_storage.get("detail") or ""),
         "keyspace": raw_storage.get("keyspace"),
+        "imported_file_history": raw_storage.get("imported_file_history"),
     }
     return {
         "platform": "linux" if tool_runner.is_linux() else "non-linux",
@@ -450,6 +453,44 @@ def health_payload() -> Dict[str, object]:
         HEALTH_CACHE["payload"] = payload
         HEALTH_CACHE["expires"] = monotonic() + HEALTH_CACHE_SECONDS
     return payload
+
+
+def startup_tool_check_messages(payload: Dict[str, object]) -> List[str]:
+    lines = ["Checking scanner tools before starting web app..."]
+    raw_tools = payload.get("tools")
+    tools = cast(Dict[str, Dict[str, object]], raw_tools) if isinstance(raw_tools, dict) else {}
+
+    for tool in tool_runner.SECURITY_TOOLS:
+        raw_info = tools.get(tool, {})
+        info = raw_info if isinstance(raw_info, dict) else {}
+        available = info.get("available") == "yes"
+        status = "OK" if available else "MISSING"
+        detail = str(info.get("detail") or ("available" if available else "not found"))
+        lines.append(f"  [{status}] {tool}: {detail}")
+
+    raw_missing = payload.get("missing_tools")
+    missing = [str(tool) for tool in raw_missing] if isinstance(raw_missing, list) else []
+    if payload.get("platform") != "linux":
+        lines.append("[WARN] Scanner execution requires a native Linux environment; dry runs and history can still be used.")
+    if missing:
+        lines.append(f"[WARN] Missing scanner tools: {', '.join(missing)}")
+        lines.append("[WARN] Install missing tools before running live scans.")
+    else:
+        lines.append("[OK] All scanner tools are installed.")
+    return lines
+
+
+def print_startup_tool_check() -> None:
+    for line in startup_tool_check_messages(health_payload()):
+        print(line, flush=True)
+
+
+def open_browser(url: str) -> None:
+    opened = browser_opener.open_url(url)
+    if opened:
+        print("Opened MTScan in your browser.", flush=True)
+    else:
+        print(f"Open this URL in your browser: {url}", flush=True)
 
 
 def create_job(payload: Dict[str, object]) -> ScanJob:
@@ -674,7 +715,7 @@ class MTScanHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_security_headers()
         self.end_headers()
-        self.wfile.write(data)
+        self.safe_write(data)
 
     def send_security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -693,7 +734,13 @@ class MTScanHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.send_security_headers()
         self.end_headers()
-        self.wfile.write(payload)
+        self.safe_write(payload)
+
+    def safe_write(self, payload: bytes) -> None:
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def log_message(self, _format: str, *args: object) -> None: # type: ignore
         return
@@ -704,12 +751,24 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument("--allow-remote", action="store_true", help="Allow binding the app to a non-loopback interface")
+    parser.add_argument(
+        "--skip-tool-check",
+        action="store_true",
+        help="Skip the startup scanner tool check when the caller already performed it",
+    )
+    parser.add_argument("--no-browser", action="store_true", help="Do not try to open the dashboard automatically")
     args = parser.parse_args()
 
     if not args.allow_remote and not is_loopback_bind_host(args.host):
         raise SystemExit("Refusing non-loopback bind without --allow-remote.")
 
-    server = ThreadingHTTPServer((args.host, args.port), MTScanHandler)
+    if not args.skip_tool_check:
+        print_startup_tool_check()
+
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), MTScanHandler)
+    except OSError as exc:
+        raise SystemExit(f"Could not start MTScan app on {args.host}:{args.port}: {exc}") from exc
     allowed_hosts = {host.lower() for host in LOOPBACK_HOSTS}
     allowed_hosts.add(args.host.strip().strip("[]").lower())
     if args.allow_remote:
@@ -717,6 +776,8 @@ def main() -> None:
     server.allowed_hosts = allowed_hosts  # type: ignore[attr-defined]
     url = f"http://{args.host}:{args.port}"
     print(f"MTScan app listening at {url}")
+    if not args.no_browser:
+        open_browser(url)
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

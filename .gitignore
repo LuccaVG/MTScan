@@ -140,6 +140,7 @@ reports/
 *.jsonl
 scan_results/
 nuclei_responses/
+config/vat_aliases.sh
 
 # Security tool outputs
 naabu_output*

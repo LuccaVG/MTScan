@@ -63,6 +63,7 @@ NUCLEI_TEXT_FINDING_PATTERN = re.compile(
 )
 CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
 CWE_PATTERN = re.compile(r"\bCWE-\d+\b", re.IGNORECASE)
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TARGET_FORBIDDEN_PATTERN = re.compile(r"[\x00-\x1f\x7f\s]")
 BARE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:\-\[\]/]+$")
 SEVERITY_FILTER_VALUES = SECURITY_FINDING_SEVERITIES | {"info", "unknown"}
@@ -233,6 +234,22 @@ def get_tool_help(tool_path: str) -> str:
     return ""
 
 
+def best_tool_detail(*outputs: object) -> Optional[str]:
+    lines: List[str] = []
+    for output in outputs:
+        for line in str(output or "").splitlines():
+            clean = ANSI_ESCAPE_PATTERN.sub("", line).strip()
+            if clean:
+                lines.append(clean)
+    for line in lines:
+        if "version" in line.lower():
+            return line
+    for line in lines:
+        if any(ch.isalnum() for ch in line):
+            return line
+    return None
+
+
 def verify_tool(tool_name: str) -> Tuple[bool, Optional[str], Optional[str]]:
     path = get_executable_path(tool_name)
     if not path:
@@ -248,8 +265,7 @@ def verify_tool(tool_name: str) -> Tuple[bool, Optional[str], Optional[str]]:
                 check=False,
             )
             if result.returncode == 0:
-                version = (result.stdout or result.stderr).strip().splitlines()
-                return True, path, version[0] if version else None
+                return True, path, best_tool_detail(result.stdout, result.stderr)
         except Exception:
             continue
     return False, path, "found but did not respond to version/help checks"
@@ -376,12 +392,12 @@ def validate_scan_options(options: Dict[str, object]) -> None:
 
     top_ports = options.get("top_ports")
     if top_ports not in (None, ""):
-        _coerce_int_option("top ports", top_ports, 1, 65535)
+        options["top_ports"] = _coerce_int_option("top ports", top_ports, 1, 65535)
 
     for name, (minimum, maximum) in POSITIVE_INTEGER_OPTIONS.items():
         value = options.get(name)
         if value not in (None, ""):
-            _coerce_int_option(name, value, minimum, maximum)
+            options[name] = _coerce_int_option(name, value, minimum, maximum)
 
     scan_type = options.get("scan_type")
     if scan_type not in (None, "", "syn", "connect"):
@@ -629,6 +645,7 @@ def build_nuclei_command(
     interactsh_token: Optional[str] = None,
     markdown_export: Optional[str] = None,
     sarif_export: Optional[str] = None,
+    no_color: bool = True,
     extra_args: Optional[Sequence[str]] = None,
     tool_path: Optional[str] = None,
 ) -> List[str]:
@@ -678,6 +695,7 @@ def build_nuclei_command(
     _append_bool(cmd, "-jsonl", jsonl)
     _append_bool(cmd, "-csv", csv_output)
     _append_bool(cmd, "-silent", silent)
+    _append_bool(cmd, "-no-color", no_color)
 
     if extra_args:
         cmd.extend([str(arg) for arg in extra_args if str(arg)])
@@ -803,13 +821,16 @@ def run_command(
             timer.cancel()
         if process is not None:
             _stop_process(process, kill=True)
+        error = str(exc)
+        if isinstance(exc, PermissionError) and cmd and os.sep not in cmd[0] and shutil.which(cmd[0]) is None:
+            error = f"{cmd[0]} not found in PATH"
         return ToolResult(
             tool=tool,
             command=cmd,
             success=False,
             output_lines=output_lines,
             output_file=output_file,
-            error=str(exc),
+            error=error,
         )
 
 
@@ -904,6 +925,195 @@ def _extract_http_urls(lines: Iterable[str]) -> List[str]:
 
 def _write_lines(path: Path, lines: Iterable[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _emit_workflow_line(message: str, on_line: Optional[Callable[[str], None]]) -> None:
+    if on_line:
+        on_line(message)
+    else:
+        print(message)
+
+
+def _preview_items(items: Sequence[str], limit: int = 8) -> str:
+    preview = ", ".join(items[:limit])
+    if len(items) > limit:
+        preview += f", ... {len(items) - limit} more"
+    return preview or "none"
+
+
+def _skipped_result(tool: str, reason: str, on_line: Optional[Callable[[str], None]]) -> ToolResult:
+    message = f"[MTScan] Skipping {tool}: {reason}"
+    _emit_workflow_line(message, on_line)
+    return ToolResult(tool=tool, command=[], success=False, output_lines=[message], error=reason)
+
+
+def _saved_output_candidates(tool: str, output_dir: Path) -> List[Path]:
+    candidates = [
+        output_path_for(tool, output_dir, json_output=False, csv_output=False),
+        output_path_for(tool, output_dir, json_output=True, csv_output=False),
+        output_path_for(tool, output_dir, json_output=False, csv_output=True),
+    ]
+    return list(dict.fromkeys(candidates))
+
+
+def cleanup_intermediate_outputs(output_dir: Path) -> None:
+    """Remove raw scanner artifacts after the single report has been written."""
+    candidates: List[Path] = []
+    for tool in SECURITY_TOOLS:
+        candidates.extend(_saved_output_candidates(tool, output_dir))
+    candidates.extend([output_dir / "httpx_targets.txt", output_dir / "nuclei_targets.txt"])
+
+    for path in dict.fromkeys(candidates):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _hydrate_result_lines_from_files(results: Sequence[ToolResult]) -> None:
+    """Keep parsed output available in memory before report-only cleanup."""
+    for result in results:
+        lines = _read_nonempty_lines(result.output_file)
+        if lines:
+            result.output_lines = lines
+
+
+def _clear_result_output_files(results: Sequence[ToolResult]) -> None:
+    for result in results:
+        result.output_file = None
+
+
+def _count_from_markdown_row(line: str, label: str) -> Optional[int]:
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    if len(cells) < 2 or cells[0].lower() != label.lower():
+        return None
+    try:
+        return int(cells[1].replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _markdown_backtick_value(line: str) -> Optional[str]:
+    match = re.match(r"^\s*-\s+`(?P<value>.+)`\s*$", line)
+    return match.group("value") if match else None
+
+
+def summarize_report_file(target: str, report: Path) -> Dict[str, object]:
+    """Recover high-level counts from a report-only result directory."""
+    summary: Dict[str, object] = {
+        "target": target,
+        "open_ports": 0,
+        "open_port_targets": [],
+        "http_services": 0,
+        "http_urls": [],
+        "findings_total": 0,
+        "security_findings": 0,
+        "observations": 0,
+        "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0},
+        "category_counts": {},
+        "cve_findings": 0,
+        "chart_data": _chart_data([], [], [], {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0}),
+        "tools": [],
+        "findings": [],
+    }
+
+    try:
+        lines = report.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return summary
+
+    open_ports: List[str] = []
+    http_urls: List[str] = []
+    severity_counts = cast(Dict[str, int], summary["severity_counts"])
+    category_counts: Dict[str, int] = {}
+    section = ""
+    heading = ""
+
+    for line in lines:
+        text = line.strip()
+        if text == "Open ports discovered:":
+            section = "open_ports"
+            continue
+        if text == "HTTP services discovered:":
+            section = "http_urls"
+            continue
+        if text.startswith("## "):
+            heading = text.removeprefix("## ").strip()
+            section = ""
+            continue
+
+        if section == "open_ports":
+            value = _markdown_backtick_value(text)
+            if value:
+                open_ports.append(value)
+            continue
+        if section == "http_urls":
+            value = _markdown_backtick_value(text)
+            if value:
+                http_urls.append(value)
+            continue
+
+        for metric, key in (
+            ("Open ports", "open_ports"),
+            ("HTTP services", "http_services"),
+            ("Security findings", "security_findings"),
+            ("Informational observations", "observations"),
+        ):
+            count = _count_from_markdown_row(text, metric)
+            if count is not None:
+                summary[key] = count
+
+        for severity in ("Critical", "High", "Medium", "Low", "Info"):
+            count = _count_from_markdown_row(text, severity)
+            if count is not None:
+                severity_counts[severity.lower()] = count
+
+        cells = [cell.strip() for cell in text.strip("|").split("|")]
+        if heading == "Finding Breakdown" and len(cells) == 2 and cells[0] not in {"---", "Category"}:
+            try:
+                category_counts[cells[0]] = int(cells[1].replace(",", ""))
+            except ValueError:
+                pass
+
+    if open_ports:
+        summary["open_port_targets"] = open_ports
+        if not summary.get("open_ports"):
+            summary["open_ports"] = len(open_ports)
+    if http_urls:
+        summary["http_urls"] = http_urls
+        if not summary.get("http_services"):
+            summary["http_services"] = len(http_urls)
+
+    summary["category_counts"] = category_counts
+    findings_total = int(summary.get("security_findings") or 0) + int(summary.get("observations") or 0)
+    summary["findings_total"] = findings_total
+    summary["chart_data"] = {
+        "severity": severity_counts,
+        "surface": {
+            "open_ports": int(summary.get("open_ports") or 0),
+            "http_services": int(summary.get("http_services") or 0),
+            "findings": findings_total,
+        },
+        "categories": category_counts,
+        "cve_findings": 0,
+    }
+    return summary
+
+
+def summarize_saved_outputs(target: str, output_dir: Path) -> Dict[str, object]:
+    """Summarize conventional scanner output files from a completed result directory."""
+    results: List[ToolResult] = []
+    for tool in SECURITY_TOOLS:
+        existing = [path for path in _saved_output_candidates(tool, output_dir) if path.exists()]
+        if not existing:
+            continue
+        output_file = max(existing, key=lambda path: path.stat().st_mtime)
+        results.append(ToolResult(tool=tool, command=[], success=True, output_file=output_file))
+    if not results:
+        report = output_dir / REPORT_FILENAME
+        if report.exists():
+            return summarize_report_file(target, report)
+    return summarize_scan_results(target, results)
 
 
 def _markdown_cell(value: object) -> str:
@@ -1033,7 +1243,7 @@ def _normalize_finding(data: Dict[str, object]) -> Dict[str, object]:
 
 def nuclei_finding_severity(line: str) -> Optional[str]:
     """Return nuclei result severity for actual findings, excluding status logs."""
-    text = line.strip()
+    text = ANSI_ESCAPE_PATTERN.sub("", line).strip()
     if not text:
         return None
 
@@ -1116,49 +1326,55 @@ def parse_nuclei_findings(path: Optional[Path]) -> List[Dict[str, object]]:
             return []
 
     try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            text = line.strip()
-            if not text:
-                continue
-            if text.startswith("{"):
-                try:
-                    data = json.loads(text)
-                    if isinstance(data, dict):
-                        finding = _normalize_finding(data)
-                        if str(finding.get("severity") or "").lower() in NUCLEI_FINDING_SEVERITIES:
-                            if finding.get("template_id") != "N/A" and finding.get("matched_at") != "N/A":
-                                findings.append(finding)
-                        continue
-                except json.JSONDecodeError:
-                    pass
-            match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
-            if match:
-                severity = match.group("severity").lower()
-                if severity not in NUCLEI_FINDING_SEVERITIES:
-                    continue
-                template = match.group("template")
-                cves = _extract_cves(template)
-                cwes = _extract_cwes(template)
-                findings.append(
-                    {
-                        "name": template,
-                        "severity": severity,
-                        "template_id": template,
-                        "matched_at": match.group("matched"),
-                        "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
-                        "impact": "",
-                        "remediation": "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
-                        "references": [],
-                        "cve": cves,
-                        "cwe": cwes,
-                        "category": _finding_category_from_parts(template, cves),
-                        "tags": [],
-                        "matcher_name": "",
-                        "extracted_results": [],
-                    }
-                )
+        findings.extend(parse_nuclei_finding_lines(path.read_text(encoding="utf-8", errors="ignore").splitlines()))
     except OSError:
         return []
+    return findings
+
+
+def parse_nuclei_finding_lines(lines: Iterable[str]) -> List[Dict[str, object]]:
+    findings: List[Dict[str, object]] = []
+    for line in lines:
+        text = ANSI_ESCAPE_PATTERN.sub("", line).strip()
+        if not text:
+            continue
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    finding = _normalize_finding(data)
+                    if str(finding.get("severity") or "").lower() in NUCLEI_FINDING_SEVERITIES:
+                        if finding.get("template_id") != "N/A" and finding.get("matched_at") != "N/A":
+                            findings.append(finding)
+                    continue
+            except json.JSONDecodeError:
+                pass
+        match = NUCLEI_TEXT_FINDING_PATTERN.match(text)
+        if match:
+            severity = match.group("severity").lower()
+            if severity not in NUCLEI_FINDING_SEVERITIES:
+                continue
+            template = match.group("template")
+            cves = _extract_cves(template)
+            cwes = _extract_cwes(template)
+            findings.append(
+                {
+                    "name": template,
+                    "severity": severity,
+                    "template_id": template,
+                    "matched_at": match.group("matched"),
+                    "description": "Text output did not include a full description. Re-run with --json-output for richer details.",
+                    "impact": "",
+                    "remediation": "Validate the finding, patch or reconfigure the affected service, and remove unnecessary exposure.",
+                    "references": [],
+                    "cve": cves,
+                    "cwe": cwes,
+                    "category": _finding_category_from_parts(template, cves),
+                    "tags": [],
+                    "matcher_name": "",
+                    "extracted_results": [],
+                }
+            )
     return findings
 
 
@@ -1370,6 +1586,8 @@ def summarize_scan_results(target: str, results: Sequence[ToolResult]) -> Dict[s
 
     nuclei_result = by_tool.get("nuclei")
     findings = parse_nuclei_findings(nuclei_result.output_file if nuclei_result else None)
+    if not findings and nuclei_result:
+        findings = parse_nuclei_finding_lines(nuclei_result.output_lines)
     severity_counts = _severity_counts(findings)
     security_findings = [
         finding for finding in findings
@@ -1433,6 +1651,7 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
     risk_label = _overall_risk_label(severity_counts)
     generated_at = _dt.datetime.now().isoformat(timespec="seconds")
     report = output_dir / REPORT_FILENAME
+    tools_run = {result.tool for result in results}
 
     lines = [
         "# MTScan Vulnerability Report",
@@ -1487,16 +1706,16 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
             ]
         )
 
-    lines.extend(
-        [
-            "## What Was Checked",
-            "",
-            "- `naabu` discovered exposed TCP services.",
-            "- `httpx` identified reachable HTTP and HTTPS services and collected web context.",
-            "- `nuclei` checked discovered HTTP targets for known vulnerabilities, exposures, and misconfigurations.",
-            "",
-        ]
-    )
+    lines.extend(["## What Was Checked", ""])
+    if "naabu" in tools_run:
+        lines.append("- `naabu` discovered exposed TCP services.")
+    if "httpx" in tools_run:
+        lines.append("- `httpx` identified reachable HTTP and HTTPS services and collected web context.")
+    if "nuclei" in tools_run:
+        lines.append("- `nuclei` checked HTTP targets for known vulnerabilities, exposures, and misconfigurations.")
+    if not tools_run:
+        lines.append("- No scanner execution metadata was available.")
+    lines.append("")
 
     if findings:
         lines.extend(
@@ -1619,41 +1838,47 @@ def write_vulnerability_report(output_dir: Path, target: str, results: Sequence[
     open_ports = cast(List[object], summary.get("open_port_targets") or [])
     http_urls = cast(List[object], summary.get("http_urls") or [])
     lines.extend(["## Exposure Context", ""])
-    if open_ports:
-        lines.append("Open ports discovered:")
-        for item in open_ports[:50]:
-            lines.append(f"- `{_markdown_cell(item)}`")
-        if len(open_ports) > 50:
-            lines.append(f"- ... {len(open_ports) - 50} more")
-        lines.append("")
-    else:
-        lines.append("No open ports were parsed from the saved naabu output.")
-        lines.append("")
+    if "naabu" in tools_run:
+        if open_ports:
+            lines.append("Open ports discovered:")
+            for item in open_ports[:50]:
+                lines.append(f"- `{_markdown_cell(item)}`")
+            if len(open_ports) > 50:
+                lines.append(f"- ... {len(open_ports) - 50} more")
+            lines.append("")
+        else:
+            lines.append("No open ports were parsed from the saved naabu output.")
+            lines.append("")
 
-    if http_urls:
-        lines.append("HTTP services discovered:")
-        for item in http_urls[:50]:
-            lines.append(f"- `{_markdown_cell(item)}`")
-        if len(http_urls) > 50:
-            lines.append(f"- ... {len(http_urls) - 50} more")
-        lines.append("")
-    else:
-        lines.append("No HTTP services were parsed from the saved httpx output.")
+    if "httpx" in tools_run:
+        if http_urls:
+            lines.append("HTTP services discovered:")
+            for item in http_urls[:50]:
+                lines.append(f"- `{_markdown_cell(item)}`")
+            if len(http_urls) > 50:
+                lines.append(f"- ... {len(http_urls) - 50} more")
+            lines.append("")
+        else:
+            lines.append("No HTTP services were parsed from the saved httpx output.")
+            lines.append("")
+
+    if "naabu" not in tools_run and "httpx" not in tools_run:
+        lines.append("Surface discovery was not part of this scan.")
+        lines.append(f"Scanner target: `{_markdown_cell(target)}`")
         lines.append("")
 
     lines.extend(
         [
             "## Tool Execution",
             "",
-            "| Tool | Status | Output file | Notes |",
-            "|---|---|---|---|",
+            "| Tool | Status | Notes |",
+            "|---|---|---|",
         ]
     )
     for result in results:
         status = "success" if result.success else "failed"
-        output_file = _markdown_cell(_public_path_value(result.output_file) or "N/A")
         note = _markdown_cell(result.error or f"{len(result.output_lines)} streamed lines")
-        lines.append(f"| `{result.tool}` | {status} | `{output_file}` | {note} |")
+        lines.append(f"| `{result.tool}` | {status} | {note} |")
 
     lines.extend(["", "## Commands", ""])
     for result in results:
@@ -1681,7 +1906,11 @@ def write_security_findings_report(output_dir: Path, target: str, results: Seque
 
 def write_summary(output_dir: Path, target: str, results: Sequence[ToolResult]) -> Path:
     """Compatibility wrapper for older callers; writes the single report."""
-    return write_vulnerability_report(output_dir, target, results)
+    _hydrate_result_lines_from_files(results)
+    report = write_vulnerability_report(output_dir, target, results)
+    cleanup_intermediate_outputs(output_dir)
+    _clear_result_output_files(results)
+    return report
 
 
 def target_urls_for_nuclei(target: str) -> List[str]:
@@ -1832,9 +2061,26 @@ def run_chain(
         on_line=on_line,
     )
     results.append(naabu_result)
+    if not dry_run and not naabu_result.success:
+        reason = naabu_result.error or "naabu failed"
+        results.append(_skipped_result("httpx", f"naabu did not complete successfully ({reason})", on_line))
+        results.append(_skipped_result("nuclei", "httpx was skipped", on_line))
+        write_summary(output_dir, target, results)
+        return results
 
     naabu_lines = [] if dry_run else (_read_nonempty_lines(naabu_file) or naabu_result.output_lines)
-    naabu_targets = _extract_naabu_targets(naabu_lines)
+    naabu_targets = sorted(set(_extract_naabu_targets(naabu_lines)))
+    if not dry_run:
+        if naabu_targets:
+            _emit_workflow_line(
+                f"[MTScan] Open TCP services discovered ({len(naabu_targets)}): {_preview_items(naabu_targets)}",
+                on_line,
+            )
+        else:
+            _emit_workflow_line(
+                "[MTScan] No open TCP services were parsed from naabu output; httpx will probe the original target.",
+                on_line,
+            )
     httpx_input = output_dir / "httpx_targets.txt"
     if naabu_targets:
         _write_lines(httpx_input, naabu_targets)
@@ -1877,9 +2123,25 @@ def run_chain(
         on_line=on_line,
     )
     results.append(httpx_result)
+    if not dry_run and not httpx_result.success:
+        reason = httpx_result.error or "httpx failed"
+        results.append(_skipped_result("nuclei", f"httpx did not complete successfully ({reason})", on_line))
+        write_summary(output_dir, target, results)
+        return results
 
     httpx_lines = [] if dry_run else (_read_nonempty_lines(httpx_file) or httpx_result.output_lines)
-    urls = _extract_http_urls(httpx_lines)
+    urls = sorted(set(_extract_http_urls(httpx_lines)))
+    if not dry_run:
+        if urls:
+            _emit_workflow_line(
+                f"[MTScan] HTTP services discovered ({len(urls)}): {_preview_items(urls)}",
+                on_line,
+            )
+        elif naabu_targets:
+            _emit_workflow_line(
+                "[MTScan] Discovered ports did not respond as HTTP(S); nuclei scans HTTP(S) targets only.",
+                on_line,
+            )
     nuclei_json = json_output or bool(options.get("nuclei_json"))
     nuclei_file = output_path_for("nuclei", output_dir, nuclei_json, bool(options.get("nuclei_csv")))
     if not urls and not dry_run:

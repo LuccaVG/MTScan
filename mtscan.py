@@ -14,6 +14,7 @@ import socket
 import re
 import ipaddress
 import urllib.parse
+import urllib.request
 import threading
 import signal
 import time
@@ -23,6 +24,7 @@ from typing import Callable, Optional, Union, cast
 FindingLinePredicate = Callable[[str], bool]
 SignalValue = Union[int, signal.Signals]
 KillpgFunction = Callable[[int, SignalValue], None]
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 _killpg = getattr(os, "killpg", None)
 _linux_killpg = cast(Optional[KillpgFunction], _killpg if callable(_killpg) else None)
@@ -37,7 +39,9 @@ def kill_process_group(pid: int, sig: SignalValue) -> None:
 SIGKILL: SignalValue = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 # Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.browser_opener import open_url
 
 # Try to import utils for tool detection
 try:
@@ -60,6 +64,7 @@ try:
         is_informational_finding_line as _is_informational_finding_line,
         is_security_finding_line as _is_security_finding_line,
         redact_command as _redact_command,
+        summarize_saved_outputs as _summarize_saved_outputs,
     )
 except ImportError:
     def _is_security_finding_line(line: str) -> bool:
@@ -70,6 +75,9 @@ except ImportError:
 
     def _redact_command(command):
         return [str(part) for part in command]
+
+    def _summarize_saved_outputs(target: str, output_dir: Path):
+        return {}
 
 is_security_finding_line: FindingLinePredicate = _is_security_finding_line
 is_informational_finding_line: FindingLinePredicate = _is_informational_finding_line
@@ -100,6 +108,65 @@ def format_flag_value_for_display(flag, value):
         text = str(value or "")
         return Path(text).name if text else ""
     return str(value)
+
+
+def format_duration(seconds):
+    whole_seconds = max(0, int(seconds))
+    minutes, remaining_seconds = divmod(whole_seconds, 60)
+    return f"{seconds:.2f} seconds ({minutes}m {remaining_seconds:02d}s)"
+
+
+def result_directories():
+    return [
+        item for item in os.listdir('.')
+        if os.path.isdir(item) and item.startswith('results_')
+    ]
+
+
+def latest_results_directory(previous_dirs=None):
+    previous_dirs = previous_dirs or set()
+    dirs = result_directories()
+    candidates = [item for item in dirs if item not in previous_dirs] or dirs
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: os.path.getmtime(item))
+
+
+def print_saved_exposure_summary(result_dir, target):
+    try:
+        summary = _summarize_saved_outputs(target, Path(result_dir))
+    except Exception as exc:
+        print(f"[WARN] Could not summarize saved scanner output: {exc}")
+        return
+
+    open_ports = list(summary.get("open_port_targets") or [])
+    http_urls = list(summary.get("http_urls") or [])
+    security_findings = int(summary.get("security_findings") or 0)
+    observations = int(summary.get("observations") or 0)
+
+    print("\n" + "=" * 80)
+    print("EXPOSURE SUMMARY")
+    print("=" * 80)
+    print(f"[OPEN PORTS] {len(open_ports)} discovered")
+    for item in open_ports[:10]:
+        print(f"  - {item}")
+    if len(open_ports) > 10:
+        print(f"  - ... {len(open_ports) - 10} more")
+
+    print(f"[HTTP SERVICES] {len(http_urls)} discovered")
+    for item in http_urls[:10]:
+        print(f"  - {item}")
+    if len(http_urls) > 10:
+        print(f"  - ... {len(http_urls) - 10} more")
+
+    print(f"[NUCLEI RISKS] {security_findings} security findings")
+    if observations:
+        print(f"[OBSERVATIONS] {observations} informational nuclei observations")
+    if open_ports and not http_urls:
+        print("[NOTE] Open TCP services were found, but none responded as HTTP(S).")
+        print("[NOTE] Nuclei checks HTTP(S) targets in the chain, so SSH-only exposure is listed here and in the report.")
+    elif open_ports and security_findings == 0:
+        print("[NOTE] The scan found exposed services, but no confirmed nuclei risks.")
 
 # Ensure we're running on Linux
 if platform.system().lower() != "linux":
@@ -245,18 +312,41 @@ def print_tools_status():
     
     print()
 
+
+def print_web_app_tool_preflight():
+    """Print scanner tool readiness before handing control to the web app."""
+    print("Checking scanner tools before starting web app...")
+    status = check_tools_status()
+    missing_tools = []
+
+    for tool, info in status.items():
+        if info['installed']:
+            print(f"  [OK]      {tool.upper():<8} Available")
+        else:
+            print(f"  [MISSING] {tool.upper():<8} Not found")
+            missing_tools.append(tool)
+
+    if missing_tools:
+        print(f"[WARNING] Missing tools: {', '.join(missing_tools)}")
+        print("[WARNING] The dashboard will open, but live scans need these tools installed.")
+        print("[ACTION]  Run option [7] to install or update tools.")
+    else:
+        print("[OK] All scanner tools are installed.")
+    print()
+
+
 def print_main_menu():
     """Print enhanced main menu with better formatting."""
     print("SCAN OPERATIONS:")
     print("=" * 60)
-    print("  [1] Complete CLI Scan Chain   (naabu -> httpx -> nuclei)")
+    print("  [1] Launch Local Web App")
+    print("      Start the dashboard on localhost with persisted scan history")
+    print()
+    print("  [2] Complete CLI Scan Chain   (naabu -> httpx -> nuclei)")
     print("      Run port discovery, service analysis, and vulnerability checks")
     print()
-    print("  [2] Single Tool CLI Scan")
+    print("  [3] Single Tool CLI Scan")
     print("      Choose naabu, httpx, or nuclei from a submenu")
-    print()
-    print("  [3] Launch Local Web App")
-    print("      Start the browser-based dashboard on localhost")
     print()
     print("MANAGEMENT OPERATIONS:")
     print("=" * 60)
@@ -481,8 +571,8 @@ def run_scan(scan_type, target, **kwargs):
     print("=" * 60)
     print(f"[TOOL]           {scan_type.upper()}")
     print(f"[TARGET]         {target}")
-    print(f"[SAVE OUTPUT]    ENABLED (always)")
-    print(f"[OUTPUT FORMAT]  TEXT (default)")
+    print(f"[SCAN REPORT]    ENABLED (vulnerability_report.md)")
+    print(f"[RAW OUTPUTS]    INTERNAL ONLY (cleaned after report)")
     print(f"[REAL-TIME]      ENABLED")
     print(f"[FLAGS COUNT]    {len(flags)}")
     
@@ -688,8 +778,8 @@ def run_scan(scan_type, target, **kwargs):
     print(f"[COMMAND]    {format_command_for_display(cmd)}")
     print(f"\n[CONFIGURATION]")
     print(f"  Real-time output: ENABLED")
-    print(f"  Save to files:    {'ENABLED' if save_output else 'DISABLED'}")
-    print(f"  Output format:    {'JSON' if json_output else 'TEXT'}")
+    print(f"  Scan report:      {'ENABLED' if save_output else 'DISABLED'}")
+    print(f"  Raw tool outputs: INTERNAL ONLY")
     print(f"  Flags selected:   {len(flags)}")
     
     if flags:
@@ -710,6 +800,7 @@ def run_scan(scan_type, target, **kwargs):
     # Initialize variables to avoid scope issues
     process = None
     start_time = time.time()
+    existing_result_dirs = set(result_directories()) if save_output else set()
     
     try:
         # Start the scan process with real-time output streaming
@@ -768,11 +859,21 @@ def run_scan(scan_type, target, **kwargs):
         # Wait for process to complete
         return_code = process.wait()
         elapsed_total = time.time() - start_time
+
+        latest_dir = None
+        if save_output:
+            try:
+                latest_dir = latest_results_directory(existing_result_dirs)
+                if latest_dir:
+                    saved_summary = _summarize_saved_outputs(target, Path(latest_dir))
+                    findings_count = int(saved_summary.get("security_findings") or 0)
+            except Exception:
+                pass
         
         # Enhanced scan completion summary
         print("-" * 80)
         print(f"[SCAN COMPLETED] {datetime.datetime.now().strftime('%H:%M:%S')}")
-        print(f"[DURATION] {elapsed_total:.2f} seconds ({elapsed_total/60:.1f} minutes)")
+        print(f"[DURATION] {format_duration(elapsed_total)}")
         print(f"[OUTPUT LINES] {len(output_lines)} total")
         print(f"[SECURITY FINDINGS] {findings_count} risks detected")
         print(f"[EXIT CODE] {return_code}")
@@ -790,49 +891,39 @@ def run_scan(scan_type, target, **kwargs):
             print("SECURITY FINDINGS SUMMARY")
             print("=" * 80)
 
-            for i, finding in enumerate(finding_lines[:10], 1):
-                print(f"{i:2d}. {finding}")
-            
-            if len(finding_lines) > 10:
-                print(f"... and {len(finding_lines) - 10} more findings")
-            
-            print(f"\nTotal findings displayed: {min(len(finding_lines), 10)} of {len(finding_lines)}")
+            if finding_lines:
+                for i, finding in enumerate(finding_lines[:10], 1):
+                    print(f"{i:2d}. {finding}")
+
+                if len(finding_lines) > 10:
+                    print(f"... and {len(finding_lines) - 10} more findings")
+
+                print(f"\nTotal findings displayed: {min(len(finding_lines), 10)} of {len(finding_lines)}")
+            else:
+                print("Saved scanner output contains security findings.")
+                print("Open vulnerability_report.md for the detailed finding list.")
         else:
             print("\n[INFO] No security risks detected in this scan")
         
-        # File output information
+        # Report output information
         if save_output:
             print("\n" + "=" * 80)
-            print("OUTPUT FILES")
+            print("SCAN REPORT")
             print("=" * 80)
-            print("[INFO] Results saved to files automatically")
+            print("[INFO] MTScan saved a single scan report")
             
             # Find and display the latest results directory
             try:
-                result_dirs = [item for item in os.listdir('.') if os.path.isdir(item) and item.startswith('results_')]
-                if result_dirs:
-                    latest_dir = max(result_dirs, key=lambda x: os.path.getmtime(x))
+                latest_dir = latest_dir or latest_results_directory(existing_result_dirs)
+                if latest_dir:
                     print(f"[DIRECTORY] {latest_dir}")
-                    
-                    # List key files
-                    for filename in [
-                        'vulnerability_report.md',
-                        'naabu_results.txt',
-                        'naabu_results.json',
-                        'naabu_results.csv',
-                        'httpx_results.txt',
-                        'httpx_results.json',
-                        'httpx_results.csv',
-                        'nuclei_results.txt',
-                        'nuclei_results.jsonl',
-                        'nuclei_results.csv',
-                    ]:
-                        filepath = os.path.join(latest_dir, filename)
-                        if os.path.exists(filepath):
-                            file_size = os.path.getsize(filepath)
-                            print(f"[FILE] {filename} ({file_size:,} bytes)")
+                    report_path = os.path.join(latest_dir, 'vulnerability_report.md')
+                    if os.path.exists(report_path):
+                        file_size = os.path.getsize(report_path)
+                        print(f"[REPORT] vulnerability_report.md ({file_size:,} bytes)")
                     
                     print(f"[ACCESS] Use menu option [4] to view detailed results")
+                    print_saved_exposure_summary(latest_dir, target)
             except OSError as e:
                 print(f"[ERROR] Could not access results directory: {e}")
         else:
@@ -858,7 +949,7 @@ def run_scan(scan_type, target, **kwargs):
                 print("[STATUS] Process forcefully killed")
         
         elapsed = time.time() - start_time
-        print(f"[DURATION] Scan ran for {elapsed:.1f} seconds before interruption")
+        print(f"[DURATION] Scan ran for {format_duration(elapsed)} before interruption")
         print("=" * 80)
         return False
         
@@ -2151,6 +2242,131 @@ def single_tool_scan_menu():
         return
 
 
+def wait_for_web_app(url, process, timeout=10):
+    """Wait briefly for the local app to answer before opening the browser."""
+    health_url = f"{url}/api/health"
+    deadline = time.monotonic() + timeout
+    last_error = None
+
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            print(f"[APP] Web app exited before it became ready (code {return_code}).")
+            return False
+
+        try:
+            with urllib.request.urlopen(health_url, timeout=1) as response:  # nosec B310
+                if response.status == 200:
+                    return True
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.25)
+
+    if last_error:
+        print(f"[APP] Server did not answer readiness check yet: {last_error}")
+    else:
+        print("[APP] Server did not answer readiness check yet.")
+    return False
+
+
+def open_web_app_in_browser(url):
+    """Open the dashboard when a graphical browser is available."""
+    opened = open_url(url)
+    if opened:
+        print("[APP] Opened the dashboard in your browser.")
+    else:
+        print(f"[APP] Open this URL in Firefox: {url}")
+
+
+def storage_backend_setting():
+    return os.environ.get("MTSCAN_STORAGE_BACKEND", "auto").strip().lower()
+
+
+def cassandra_driver_available():
+    try:
+        import cassandra.cluster  # type: ignore
+    except Exception:
+        return False
+    return True
+
+
+def cassandra_host_port():
+    hosts = os.environ.get("MTSCAN_CASSANDRA_HOSTS", "127.0.0.1")
+    host = next((item.strip() for item in hosts.split(",") if item.strip()), "127.0.0.1")
+    try:
+        port = int(os.environ.get("MTSCAN_CASSANDRA_PORT", "9042"))
+    except ValueError:
+        port = 9042
+    return host, port
+
+
+def tcp_port_open(host, port, timeout=1.0):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_cassandra(host, port, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if tcp_port_open(host, port):
+            return True
+        time.sleep(2)
+    return False
+
+
+def cassandra_service_state():
+    """Return the native Cassandra service state when systemctl is available."""
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "cassandra"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+    return (result.stdout or result.stderr or "").strip() or "unknown"
+
+
+def prepare_cassandra_for_web_app():
+    """Report native Cassandra readiness so web history can be durable."""
+    backend = storage_backend_setting()
+    if backend in {"file", "off", "none", "disabled"}:
+        print(f"[DB] Cassandra startup skipped because MTSCAN_STORAGE_BACKEND={backend}.")
+        return
+
+    print("[DB] Preparing Cassandra scan history storage...")
+    if not cassandra_driver_available():
+        print("[DB] cassandra-driver is not installed; the web app will use local JSONL history.")
+        print("[DB] Install it with: python3 -m pip install -r config/requirements.txt")
+        return
+
+    host, port = cassandra_host_port()
+    if tcp_port_open(host, port):
+        print(f"[DB] Cassandra is reachable at {host}:{port}.")
+        return
+
+    service_state = cassandra_service_state()
+    if service_state == "active":
+        print("[DB] Cassandra service is active; waiting for CQL to accept connections...")
+        if wait_for_cassandra(host, port, timeout=60):
+            print(f"[DB] Cassandra is reachable at {host}:{port}.")
+        else:
+            print("[DB] Cassandra service is active but CQL is not ready yet.")
+        return
+
+    print("[DB] Cassandra is not reachable; the web app will use local JSONL history until it is running.")
+    if service_state:
+        print(f"[DB] Native service state: {service_state}")
+    print("[DB] Start it with: sudo systemctl enable --now cassandra")
+
+
 def launch_web_app():
     """Launch the local MTScan web app from the interactive menu."""
     clear_screen()
@@ -2162,7 +2378,7 @@ def launch_web_app():
     print()
 
     host = "127.0.0.1"
-    port_text = input("Port [8765]: ").strip() or "8765"
+    port_text = input("Port [8765] (press Enter): ").strip() or "8765"
     try:
         port = int(port_text)
         if port < 1 or port > 65535:
@@ -2172,7 +2388,16 @@ def launch_web_app():
         input("Press Enter to continue...")
         return
 
-    cmd = [sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port)]
+    print_web_app_tool_preflight()
+    prepare_cassandra_for_web_app()
+
+    app_path = PROJECT_ROOT / "src" / "app_server.py"
+    if not app_path.is_file():
+        print(f"[ERROR] Could not find web app server at {app_path}")
+        input("Press Enter to continue...")
+        return
+
+    cmd = [sys.executable, "-u", str(app_path), "--host", host, "--port", str(port), "--skip-tool-check", "--no-browser"]
     url = f"http://{host}:{port}"
     print()
     print(f"[APP] Starting MTScan web app at {url}")
@@ -2180,8 +2405,15 @@ def launch_web_app():
     print("=" * 60)
 
     process = None
+    env = os.environ.copy()
+    env.setdefault("MTSCAN_STORAGE_BACKEND", "auto")
     try:
-        process = subprocess.Popen(cmd, cwd=os.getcwd())
+        process = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env)
+        if wait_for_web_app(url, process):
+            print(f"[APP] Ready at {url}")
+            open_web_app_in_browser(url)
+        else:
+            print(f"[APP] If the server is still running, try opening {url}")
         return_code = process.wait()
         if return_code != 0:
             print(f"\n[APP] Web app exited with code {return_code}")
@@ -2215,14 +2447,14 @@ def main():
             print("\nGoodbye!")
             break
         elif choice == "1":
+            launch_web_app()
+        elif choice == "2":
             # Complete scan chain
             target = get_target_input()
             if target:
                 run_scan("all", target)
-        elif choice == "2":
-            single_tool_scan_menu()
         elif choice == "3":
-            launch_web_app()
+            single_tool_scan_menu()
         elif choice == "4":
             view_results()
         elif choice == "5":

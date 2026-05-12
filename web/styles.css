@@ -383,6 +383,7 @@ td {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 th {
@@ -390,6 +391,19 @@ th {
   font-size: 12px;
   text-transform: uppercase;
   background: #f8fafc;
+}
+
+.tool-status {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tool-status.ok {
+  color: var(--green);
+}
+
+.tool-status.failed {
+  color: var(--red);
 }
 
 .files-list {

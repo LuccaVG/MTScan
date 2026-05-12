@@ -17,8 +17,11 @@ const els = {
   form: document.getElementById("scanForm"),
   target: document.getElementById("targetInput"),
   profile: document.getElementById("profileSelect"),
+  ports: document.getElementById("portsInput"),
   topPorts: document.getElementById("topPortsInput"),
   timeout: document.getElementById("timeoutInput"),
+  tags: document.getElementById("tagsInput"),
+  templates: document.getElementById("templatesInput"),
   severity: document.getElementById("severitySelect"),
   dryRun: document.getElementById("dryRunInput"),
   jsonOutput: document.getElementById("jsonOutputInput"),
@@ -35,6 +38,7 @@ const els = {
   cve: document.getElementById("cveMetric"),
   log: document.getElementById("logOutput"),
   findings: document.getElementById("findingsTable"),
+  tools: document.getElementById("toolsTable"),
   files: document.getElementById("filesList"),
   history: document.getElementById("scanHistory"),
   severityChart: document.getElementById("severityChart"),
@@ -42,6 +46,11 @@ const els = {
   historyChart: document.getElementById("historyChart"),
   categoryChart: document.getElementById("categoryChart")
 };
+
+function optionValue(input) {
+  const value = input.value.trim();
+  return value || undefined;
+}
 
 function selectedMode() {
   const checked = document.querySelector("input[name='mode']:checked");
@@ -68,9 +77,12 @@ function scanPayload() {
     dry_run: els.dryRun.checked,
     json_output: els.jsonOutput.checked,
     options: {
+      ports: optionValue(els.ports),
       top_ports: els.topPorts.value,
       timeout: els.timeout.value,
-      severity: els.severity.value
+      severity: optionValue(els.severity),
+      tags: optionValue(els.tags),
+      templates: optionValue(els.templates)
     }
   };
 }
@@ -165,25 +177,83 @@ function renderScan(scan) {
   els.cve.textContent = summary.cve_findings || chartData.cve_findings || 0;
   els.log.textContent = (scan.lines || []).join("\n");
   els.log.scrollTop = els.log.scrollHeight;
-  renderFindings(summary.findings || []);
+  renderFindings(summary.findings || [], summary);
+  renderTools(scan.results || []);
   renderFiles(scan);
   drawSeverityChart(chartData.severity || summary.severity_counts || {});
   drawSurfaceChart(summary);
   drawCategoryChart(chartData.categories || summary.category_counts || {});
 }
 
-function renderFindings(findings) {
-  els.findings.replaceChildren();
-  if (!findings.length) {
+function renderTools(results) {
+  els.tools.replaceChildren();
+  if (!results.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 5;
-    cell.textContent = "No findings";
+    cell.textContent = "No tool runs";
+    row.appendChild(cell);
+    els.tools.appendChild(row);
+    return;
+  }
+  results.forEach((result) => {
+    const row = document.createElement("tr");
+    const status = result.success ? "ok" : "failed";
+    const values = [
+      result.tool || "N/A",
+      status,
+      result.output_file || "N/A",
+      (result.command_preview || []).join(" "),
+      result.error || `${result.output_lines || 0} lines`
+    ];
+    values.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index === 1) {
+        cell.className = `tool-status ${status}`;
+      }
+      row.appendChild(cell);
+    });
+    els.tools.appendChild(row);
+  });
+}
+
+function surfaceResultRows(summary) {
+  const rows = [];
+  (summary.open_port_targets || []).forEach((target) => {
+    rows.push({
+      severity: "surface",
+      category: "Open TCP Service",
+      name: "Reachable port",
+      cve: "N/A",
+      matched_at: target
+    });
+  });
+  (summary.http_urls || []).forEach((url) => {
+    rows.push({
+      severity: "surface",
+      category: "HTTP Service",
+      name: "Reachable web service",
+      cve: "N/A",
+      matched_at: url
+    });
+  });
+  return rows;
+}
+
+function renderFindings(findings, summary = {}) {
+  els.findings.replaceChildren();
+  const rows = [...surfaceResultRows(summary), ...findings];
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = "No results";
     row.appendChild(cell);
     els.findings.appendChild(row);
     return;
   }
-  findings.forEach((finding) => {
+  rows.forEach((finding) => {
     const row = document.createElement("tr");
     ["severity", "category", "name", "cve", "matched_at"].forEach((key) => {
       const cell = document.createElement("td");

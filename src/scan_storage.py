@@ -212,6 +212,7 @@ class CassandraScanStore:
         system_session.shutdown()
         self.session = self.cluster.connect(self.keyspace)
         self._ensure_schema()
+        self.imported_file_history = self._import_file_history()
 
     def _ensure_schema(self) -> None:
         self.session.execute(
@@ -248,6 +249,22 @@ class CassandraScanStore:
             ) WITH CLUSTERING ORDER BY (finished_at DESC)
             """
         )
+
+    def _import_file_history(self) -> int:
+        if os.environ.get("MTSCAN_CASSANDRA_IMPORT_FILE_HISTORY", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return 0
+        path = Path(os.environ.get("MTSCAN_HISTORY_FILE") or DEFAULT_HISTORY_FILE)
+        if not path.exists():
+            return 0
+        try:
+            limit = int(os.environ.get("MTSCAN_CASSANDRA_IMPORT_LIMIT", "5000"))
+        except ValueError:
+            limit = 5000
+        count = 0
+        for record in FileScanStore(path).list_scans(limit=max(1, limit)):
+            self.save_scan(record)
+            count += 1
+        return count
 
     def save_scan(self, record: Dict[str, object]) -> None:
         normalized = normalize_scan_record({**record, "storage": self.backend})
@@ -357,6 +374,7 @@ class CassandraScanStore:
             "hosts": self.hosts,
             "port": self.port,
             "keyspace": self.keyspace,
+            "imported_file_history": self.imported_file_history,
         }
 
 

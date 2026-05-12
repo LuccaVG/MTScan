@@ -10,17 +10,21 @@ and wrappers all share the same behavior.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import os
 import signal
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src import scan_storage
     from src import tool_runner
 else:
+    from . import scan_storage
     from . import tool_runner
 
 
@@ -237,6 +241,55 @@ def check_tools(tools: List[str], args: argparse.Namespace) -> bool:
     return not missing
 
 
+def result_record(result: tool_runner.ToolResult) -> Dict[str, object]:
+    return {
+        "tool": result.tool,
+        "command_preview": tool_runner.redact_command(result.command),
+        "success": result.success,
+        "returncode": result.returncode,
+        "error": result.error,
+        "output_file": str(result.output_file) if result.output_file else None,
+        "output_lines": len(result.output_lines),
+        "dry_run": result.dry_run,
+    }
+
+
+def persist_cli_scan(
+    target: str,
+    mode: str,
+    output_dir: Path,
+    results: List[tool_runner.ToolResult],
+    args: argparse.Namespace,
+) -> None:
+    if args.dry_run:
+        return
+    report = output_dir / tool_runner.REPORT_FILENAME
+    summary = tool_runner.summarize_scan_results(target, results)
+    if report.exists():
+        summary["report_file"] = report.name
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    record = {
+        "id": uuid.uuid4().hex[:12],
+        "target": target,
+        "mode": mode,
+        "status": "completed" if all(result.success for result in results) else "failed",
+        "created_at": now,
+        "started_at": now,
+        "finished_at": now,
+        "dry_run": False,
+        "json_output": bool(args.json_output),
+        "output_dir": str(output_dir),
+        "error": None if all(result.success for result in results) else "One or more tools failed.",
+        "results": [result_record(result) for result in results],
+        "summary": summary,
+        "report_file": report.name if report.exists() else None,
+    }
+    try:
+        scan_storage.create_store().save_scan(record)  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"Storage warning: {exc}")
+
+
 def run(args: argparse.Namespace) -> int:
     target = args.host or args.target
     if not target:
@@ -263,7 +316,7 @@ def run(args: argparse.Namespace) -> int:
 
     print(f"Target: {target}")
     print(f"Tools: {', '.join(tools)}")
-    print(f"Save output: {'yes' if args.save_output or args.all_tools else 'no'}")
+    print(f"Report output: {'yes' if args.save_output or args.all_tools else 'no'}")
     if output_dir:
         print(f"Output directory: {output_dir}")
 
@@ -279,6 +332,7 @@ def run(args: argparse.Namespace) -> int:
         report = output_dir / tool_runner.REPORT_FILENAME if output_dir else None
         if report and not args.dry_run:
             print(f"Report: {report}")
+            persist_cli_scan(target, "chain", output_dir, results, args)
         return 0 if all(result.success for result in results) else 1
 
     results = []
@@ -301,6 +355,7 @@ def run(args: argparse.Namespace) -> int:
     if output_dir and args.save_output and not args.dry_run:
         report = tool_runner.write_summary(output_dir, target, results)
         print(f"Report: {report}")
+        persist_cli_scan(target, tools[0] if len(tools) == 1 else "chain", output_dir, results, args)
 
     return 0 if all(result.success for result in results) else 1
 
