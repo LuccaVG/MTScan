@@ -24,6 +24,8 @@ except Exception:  # pragma: no cover - exercised when dependency is absent.
 
 DEFAULT_KEYSPACE = "mtscan"
 DEFAULT_HISTORY_FILE = Path(__file__).resolve().parents[1] / "data" / "scan_history.jsonl"
+DEFAULT_SCHEDULE_FILE = Path(__file__).resolve().parents[1] / "data" / "schedules.json"
+DEFAULT_AUTH_FILE = Path(__file__).resolve().parents[1] / "data" / "auth.json"
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,47}$")
 
 
@@ -101,11 +103,40 @@ def normalize_scan_record(record: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def normalize_schedule_record(record: Dict[str, object]) -> Dict[str, object]:
+    """Return an app-compatible recurring scan schedule record."""
+    schedule_id = str(record.get("id") or record.get("schedule_id") or "")
+    options = record.get("options") if isinstance(record.get("options"), dict) else {}
+    return {
+        "id": schedule_id,
+        "name": str(record.get("name") or ""),
+        "target": str(record.get("target") or ""),
+        "mode": str(record.get("mode") or "chain"),
+        "profile": str(record.get("profile") or "default"),
+        "options": options,
+        "interval_hours": int(record.get("interval_hours") or 1),
+        "enabled": bool(record.get("enabled", True)),
+        "dry_run": bool(record.get("dry_run", False)),
+        "json_output": bool(record.get("json_output", True)),
+        "created_at": _format_datetime(record.get("created_at")) or _format_datetime(_utc_now()),
+        "updated_at": _format_datetime(record.get("updated_at")) or _format_datetime(_utc_now()),
+        "last_run_at": _format_datetime(record.get("last_run_at")),
+        "next_run_at": _format_datetime(record.get("next_run_at")),
+        "last_scan_id": str(record.get("last_scan_id") or "") or None,
+        "last_status": str(record.get("last_status") or "") or None,
+    }
+
+
+def _schedule_sort_key(record: Dict[str, object]) -> str:
+    return str(record.get("next_run_at") or record.get("updated_at") or record.get("created_at") or "")
+
+
 class DisabledScanStore:
     backend = "off"
 
     def __init__(self, reason: str = "disabled") -> None:
         self.reason = reason
+        self.auth_record: Optional[Dict[str, object]] = None
 
     def save_scan(self, record: Dict[str, object]) -> None:
         return None
@@ -116,6 +147,24 @@ class DisabledScanStore:
     def get_scan(self, scan_id: str) -> Optional[Dict[str, object]]:
         return None
 
+    def save_schedule(self, record: Dict[str, object]) -> None:
+        return None
+
+    def list_schedules(self, limit: int = 100) -> List[Dict[str, object]]:
+        return []
+
+    def get_schedule(self, schedule_id: str) -> Optional[Dict[str, object]]:
+        return None
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        return False
+
+    def get_auth(self) -> Optional[Dict[str, object]]:
+        return self.auth_record.copy() if self.auth_record else None
+
+    def save_auth(self, record: Dict[str, object]) -> None:
+        self.auth_record = record.copy()
+
     def status(self) -> Dict[str, object]:
         return {"backend": self.backend, "available": "no", "detail": self.reason}
 
@@ -125,6 +174,8 @@ class FileScanStore:
 
     def __init__(self, path: Optional[Path] = None, detail: str = "local JSONL fallback") -> None:
         self.path = Path(path or os.environ.get("MTSCAN_HISTORY_FILE") or DEFAULT_HISTORY_FILE)
+        self.schedule_path = Path(os.environ.get("MTSCAN_SCHEDULE_FILE") or DEFAULT_SCHEDULE_FILE)
+        self.auth_path = Path(os.environ.get("MTSCAN_AUTH_FILE") or DEFAULT_AUTH_FILE)
         self.detail = detail
         self.lock = threading.Lock()
 
@@ -169,12 +220,75 @@ class FileScanStore:
                 return record
         return None
 
+    def _read_json_file(self, path: Path, fallback: object) -> object:
+        if not path.exists():
+            return fallback
+        with self.lock:
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return fallback
+        return _json_loads(text, fallback)
+
+    def _write_json_file(self, path: Path, data: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = _json_dumps(data) + "\n"
+        with self.lock:
+            path.write_text(payload, encoding="utf-8")
+
+    def _read_schedule_map(self) -> Dict[str, Dict[str, object]]:
+        loaded = self._read_json_file(self.schedule_path, {})
+        if not isinstance(loaded, dict):
+            return {}
+        schedules: Dict[str, Dict[str, object]] = {}
+        for key, value in loaded.items():
+            if isinstance(value, dict):
+                record = normalize_schedule_record(value)
+                schedule_id = str(record.get("id") or key)
+                if schedule_id:
+                    record["id"] = schedule_id
+                    schedules[schedule_id] = record
+        return schedules
+
+    def save_schedule(self, record: Dict[str, object]) -> None:
+        normalized = normalize_schedule_record(record)
+        schedule_id = str(normalized.get("id") or "")
+        if not schedule_id:
+            return
+        schedules = self._read_schedule_map()
+        schedules[schedule_id] = normalized
+        self._write_json_file(self.schedule_path, schedules)
+
+    def list_schedules(self, limit: int = 100) -> List[Dict[str, object]]:
+        records = sorted(self._read_schedule_map().values(), key=_schedule_sort_key)
+        return records[: max(0, limit)]
+
+    def get_schedule(self, schedule_id: str) -> Optional[Dict[str, object]]:
+        return self._read_schedule_map().get(schedule_id)
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        schedules = self._read_schedule_map()
+        if schedule_id not in schedules:
+            return False
+        schedules.pop(schedule_id, None)
+        self._write_json_file(self.schedule_path, schedules)
+        return True
+
+    def get_auth(self) -> Optional[Dict[str, object]]:
+        loaded = self._read_json_file(self.auth_path, {})
+        return loaded if isinstance(loaded, dict) and loaded else None
+
+    def save_auth(self, record: Dict[str, object]) -> None:
+        self._write_json_file(self.auth_path, record)
+
     def status(self) -> Dict[str, object]:
         return {
             "backend": self.backend,
             "available": "yes",
             "detail": self.detail,
             "path": str(self.path),
+            "schedule_path": str(self.schedule_path),
+            "auth_path": str(self.auth_path),
         }
 
 
@@ -247,6 +361,37 @@ class CassandraScanStore:
                 summary_json text,
                 PRIMARY KEY ((bucket), finished_at, scan_id)
             ) WITH CLUSTERING ORDER BY (finished_at DESC)
+            """
+        )
+        self.session.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedules (
+                schedule_id text PRIMARY KEY,
+                name text,
+                target text,
+                mode text,
+                profile text,
+                options_json text,
+                interval_hours int,
+                enabled boolean,
+                dry_run boolean,
+                json_output boolean,
+                created_at timestamp,
+                updated_at timestamp,
+                last_run_at timestamp,
+                next_run_at timestamp,
+                last_scan_id text,
+                last_status text
+            )
+            """
+        )
+        self.session.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                setting_key text PRIMARY KEY,
+                value_json text,
+                updated_at timestamp
+            )
             """
         )
 
@@ -365,6 +510,94 @@ class CassandraScanStore:
         rows = self.session.execute("SELECT * FROM scan_by_id WHERE scan_id = %s", (scan_id,))
         row = rows.one()
         return self._row_to_record(row) if row else None
+
+    def save_schedule(self, record: Dict[str, object]) -> None:
+        normalized = normalize_schedule_record(record)
+        schedule_id = str(normalized.get("id") or "")
+        if not schedule_id:
+            return
+        params = (
+            schedule_id,
+            normalized.get("name"),
+            normalized.get("target"),
+            normalized.get("mode"),
+            normalized.get("profile"),
+            _json_dumps(normalized.get("options") or {}),
+            int(normalized.get("interval_hours") or 1),
+            bool(normalized.get("enabled")),
+            bool(normalized.get("dry_run")),
+            bool(normalized.get("json_output")),
+            _parse_datetime(normalized.get("created_at")),
+            _parse_datetime(normalized.get("updated_at")),
+            _parse_datetime(normalized.get("last_run_at")),
+            _parse_datetime(normalized.get("next_run_at")),
+            normalized.get("last_scan_id"),
+            normalized.get("last_status"),
+        )
+        self.session.execute(
+            """
+            INSERT INTO schedules (
+                schedule_id, name, target, mode, profile, options_json,
+                interval_hours, enabled, dry_run, json_output, created_at,
+                updated_at, last_run_at, next_run_at, last_scan_id, last_status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            params,
+        )
+
+    def _row_to_schedule(self, row: object) -> Dict[str, object]:
+        data = {
+            "id": getattr(row, "schedule_id", ""),
+            "name": getattr(row, "name", ""),
+            "target": getattr(row, "target", ""),
+            "mode": getattr(row, "mode", "chain"),
+            "profile": getattr(row, "profile", "default"),
+            "options": _json_loads(getattr(row, "options_json", None), {}),
+            "interval_hours": getattr(row, "interval_hours", 1),
+            "enabled": getattr(row, "enabled", True),
+            "dry_run": getattr(row, "dry_run", False),
+            "json_output": getattr(row, "json_output", True),
+            "created_at": getattr(row, "created_at", None),
+            "updated_at": getattr(row, "updated_at", None),
+            "last_run_at": getattr(row, "last_run_at", None),
+            "next_run_at": getattr(row, "next_run_at", None),
+            "last_scan_id": getattr(row, "last_scan_id", None),
+            "last_status": getattr(row, "last_status", None),
+        }
+        return normalize_schedule_record(data)
+
+    def list_schedules(self, limit: int = 100) -> List[Dict[str, object]]:
+        if limit <= 0:
+            return []
+        rows = self.session.execute("SELECT * FROM schedules LIMIT %s", (max(1, min(limit, 500)),))
+        records = [self._row_to_schedule(row) for row in rows]
+        records.sort(key=_schedule_sort_key)
+        return records[:limit]
+
+    def get_schedule(self, schedule_id: str) -> Optional[Dict[str, object]]:
+        rows = self.session.execute("SELECT * FROM schedules WHERE schedule_id = %s", (schedule_id,))
+        row = rows.one()
+        return self._row_to_schedule(row) if row else None
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        existed = self.get_schedule(schedule_id) is not None
+        self.session.execute("DELETE FROM schedules WHERE schedule_id = %s", (schedule_id,))
+        return existed
+
+    def get_auth(self) -> Optional[Dict[str, object]]:
+        rows = self.session.execute("SELECT value_json FROM app_settings WHERE setting_key = %s", ("auth",))
+        row = rows.one()
+        loaded = _json_loads(getattr(row, "value_json", None), {}) if row else {}
+        return loaded if isinstance(loaded, dict) and loaded else None
+
+    def save_auth(self, record: Dict[str, object]) -> None:
+        self.session.execute(
+            """
+            INSERT INTO app_settings (setting_key, value_json, updated_at)
+            VALUES (%s, %s, %s)
+            """,
+            ("auth", _json_dumps(record), _utc_now()),
+        )
 
     def status(self) -> Dict[str, object]:
         return {

@@ -34,6 +34,7 @@ REPORT_FILENAME = "vulnerability_report.md"
 NUCLEI_FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info", "unknown"}
 SECURITY_FINDING_SEVERITIES = {"critical", "high", "medium", "low"}
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
+NUCLEI_PROTOCOL_TYPES = {"dns", "file", "http", "headless", "tcp", "workflow", "ssl", "websocket", "whois", "code", "javascript"}
 SENSITIVE_COMMAND_VALUE_FLAGS = {
     "-H",
     "-http-proxy",
@@ -78,6 +79,7 @@ POSITIVE_INTEGER_OPTIONS: Dict[str, Tuple[int, int]] = {
     "nuclei_rate_limit": (1, 1000000),
     "nuclei_timeout": (1, 86400),
     "nuclei_retries": (0, 100),
+    "nuclei_run_timeout": (1, 604800),
     "concurrency": (1, 10000),
     "parallel_processing": (1, 10000),
     "max_redirects": (0, 100),
@@ -410,6 +412,13 @@ def validate_scan_options(options: Dict[str, object]) -> None:
         if invalid:
             raise ScanInputError(f"Unsupported nuclei severity: {', '.join(invalid)}.")
 
+    protocol_types = options.get("protocol_types")
+    if protocol_types not in (None, ""):
+        values = [item.strip().lower() for item in str(protocol_types).split(",") if item.strip()]
+        invalid = [item for item in values if item not in NUCLEI_PROTOCOL_TYPES]
+        if invalid:
+            raise ScanInputError(f"Unsupported nuclei protocol type: {', '.join(invalid)}.")
+
 
 def validate_scan_request(target: object, options: Optional[Dict[str, object]] = None) -> str:
     """Validate a target plus optional scanner options and return the target string."""
@@ -623,6 +632,7 @@ def build_nuclei_command(
     exclude_tags: Optional[str] = None,
     exclude_templates: Optional[str] = None,
     exclude_matchers: Optional[str] = None,
+    protocol_types: Optional[str] = None,
     output_file: Optional[Path] = None,
     jsonl: bool = False,
     csv_output: bool = False,
@@ -641,6 +651,7 @@ def build_nuclei_command(
     max_redirects: Optional[int] = None,
     user_agent: Optional[str] = None,
     no_interactsh: bool = False,
+    disable_update_check: bool = False,
     interactsh_server: Optional[str] = None,
     interactsh_token: Optional[str] = None,
     markdown_export: Optional[str] = None,
@@ -666,6 +677,7 @@ def build_nuclei_command(
     _append_pair(cmd, "-et", exclude_tags)
     _append_pair(cmd, "-exclude-templates", exclude_templates)
     _append_pair(cmd, "-exclude-matchers", exclude_matchers)
+    _append_pair(cmd, "-pt", protocol_types)
     _append_pair(cmd, "-rl", rate_limit)
     _append_pair(cmd, "-timeout", timeout)
     _append_pair(cmd, "-retries", retries)
@@ -687,6 +699,7 @@ def build_nuclei_command(
     _append_pair(cmd, "-var", variables)
     _append_bool(cmd, "-dr", disable_redirects)
     _append_bool(cmd, "-ni", no_interactsh)
+    _append_bool(cmd, "-duc", disable_update_check)
     _append_bool(cmd, "-store-resp", store_resp)
     _append_pair(cmd, "-store-resp-dir", store_resp_dir)
 
@@ -1919,6 +1932,14 @@ def target_urls_for_nuclei(target: str) -> List[str]:
     return [f"http://{target}", f"https://{target}"]
 
 
+def nuclei_process_timeout(options: Dict[str, object]) -> Optional[int]:
+    """Return the runtime cap for nuclei, separate from quicker discovery steps."""
+    value = options.get("nuclei_run_timeout")
+    if value not in (None, ""):
+        return cast(Optional[int], value)
+    return cast(Optional[int], options.get("timeout"))
+
+
 def run_tool(
     tool: str,
     target: str,
@@ -1991,6 +2012,7 @@ def run_tool(
             exclude_tags=options.get("exclude_tags"),
             exclude_templates=options.get("exclude_templates"),
             exclude_matchers=options.get("exclude_matchers"),
+            protocol_types=options.get("protocol_types"),
             output_file=output_path,
             jsonl=json_output or bool(options.get("nuclei_json")),
             csv_output=bool(options.get("nuclei_csv")),
@@ -2009,6 +2031,7 @@ def run_tool(
             max_redirects=options.get("max_redirects"),
             user_agent=options.get("nuclei_user_agent"),
             no_interactsh=bool(options.get("no_interactsh")),
+            disable_update_check=bool(options.get("disable_update_check")),
             interactsh_server=options.get("interactsh_server"),
             interactsh_token=options.get("interactsh_token"),
             markdown_export=options.get("markdown_export"),
@@ -2017,7 +2040,8 @@ def run_tool(
     else:
         raise ValueError(f"unknown tool: {tool}")
 
-    return run_command(tool, cmd, timeout=options.get("timeout"), output_file=output_path, dry_run=dry_run, on_line=on_line)
+    command_timeout = nuclei_process_timeout(options) if tool == "nuclei" else cast(Optional[int], options.get("timeout"))
+    return run_command(tool, cmd, timeout=command_timeout, output_file=output_path, dry_run=dry_run, on_line=on_line)
 
 
 def run_chain(
@@ -2184,6 +2208,7 @@ def run_chain(
         exclude_tags=options.get("exclude_tags"),
         exclude_templates=options.get("exclude_templates"),
         exclude_matchers=options.get("exclude_matchers"),
+        protocol_types=options.get("protocol_types"),
         output_file=nuclei_file if save_output else None,
         jsonl=nuclei_json,
         csv_output=bool(options.get("nuclei_csv")),
@@ -2202,12 +2227,22 @@ def run_chain(
         max_redirects=options.get("max_redirects"),
         user_agent=options.get("nuclei_user_agent"),
         no_interactsh=bool(options.get("no_interactsh")),
+        disable_update_check=bool(options.get("disable_update_check")),
         interactsh_server=options.get("interactsh_server"),
         interactsh_token=options.get("interactsh_token"),
         markdown_export=options.get("markdown_export"),
         sarif_export=options.get("sarif_export"),
     )
-    results.append(run_command("nuclei", nuclei_cmd, timeout=options.get("timeout"), output_file=nuclei_file if save_output else None, dry_run=dry_run, on_line=on_line))
+    results.append(
+        run_command(
+            "nuclei",
+            nuclei_cmd,
+            timeout=nuclei_process_timeout(options),
+            output_file=nuclei_file if save_output else None,
+            dry_run=dry_run,
+            on_line=on_line,
+        )
+    )
 
     if not dry_run:
         write_summary(output_dir, target, results)

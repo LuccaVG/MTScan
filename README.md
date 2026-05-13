@@ -3,11 +3,9 @@
 MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates the
 ProjectDiscovery scanners `naabu`, `httpx`, and `nuclei`.
 
-It is designed to be usable in three ways:
-
-- Complete CLI chain: `naabu -> httpx -> nuclei`
-- Single-tool CLI scans: choose only `naabu`, `httpx`, or `nuclei`
-- Local web app: a localhost dashboard with live output, scan history, and graph data
+It is now centered on the local web app: an authenticated localhost console for
+manual scans, recurring schedules, monitoring, scan history, findings, assets,
+and reports. The scanner runner is still shared internally by the web app.
 
 Use MTScan only on systems you own or have explicit permission to test.
 
@@ -59,27 +57,16 @@ export PATH="$PATH:/usr/local/bin:$HOME/go/bin"
 
 Detailed setup notes are in [docs/INSTALL.md](docs/INSTALL.md).
 
-## CLI Usage
+## Web App Usage
 
-Complete chain:
-
-```bash
-python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
-```
-
-Single tool:
+Start the authenticated local console:
 
 ```bash
-python3 src/workflow.py -naabu -host example.com --top-ports 100
-python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect
-python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --json-output
+python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
 
-Dry run without launching scanners:
-
-```bash
-python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output
-```
+Open `http://127.0.0.1:8765`, sign in with `admin` / `admin`, then change the
+password when prompted.
 
 Check scanner availability:
 
@@ -98,13 +85,11 @@ python3 mtscan.py
 Current menu flow:
 
 - `[1]` Launch Local Web App
-- `[2]` Complete CLI Scan Chain
-- `[3]` Single Tool CLI Scan
-- `[4]` View Previous Results
-- `[5]` Update Nuclei Templates
-- `[6]` Tool Configuration
-- `[7]` Install/Update Tools
-- `[8]` Help & Documentation
+- `[2]` View Previous Results
+- `[3]` Update Nuclei Templates
+- `[4]` Tool Configuration
+- `[5]` Install/Update Tools
+- `[6]` Help & Documentation
 
 Usage details are in [docs/USAGE.md](docs/USAGE.md).
 
@@ -122,8 +107,10 @@ Open:
 http://127.0.0.1:8765
 ```
 
-The app uses the shared Python scanner runner. It includes live logs, scan
-history, result summaries, and graphs for findings and exposed surface.
+The app uses the shared Python scanner runner. It includes authentication,
+manual scans, recurring schedules, live logs, scan history, result summaries,
+asset views, reports, and graphs for findings and exposed surface. The default
+login is `admin` / `admin`; the password must be changed after first login.
 
 Safe local severity validation fixtures live in `tests/fixtures/`. They bind to
 `127.0.0.1` only and use static markers so release testing can exercise
@@ -166,7 +153,7 @@ Storage environment variables:
 ## Documentation
 
 - [docs/INSTALL.md](docs/INSTALL.md): installation and setup
-- [docs/USAGE.md](docs/USAGE.md): CLI, menu, web app, reports
+- [docs/USAGE.md](docs/USAGE.md): menu, web app, schedules, and reports
 - [docs/MAINTAINER_GUIDE.md](docs/MAINTAINER_GUIDE.md): architecture, safety rules, verification, and change checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md): contribution rules and license terms
 - [SECURITY.md](SECURITY.md): security policy and responsible use
@@ -192,11 +179,10 @@ dependencies, names, logos, or trademarks.
 MTScan é um kit de análise de vulnerabilidades focado em Linux que orquestra os
 scanners ProjectDiscovery `naabu`, `httpx` e `nuclei`.
 
-Ele pode ser usado de três formas:
-
-- Cadeia completa no CLI: `naabu -> httpx -> nuclei`
-- Varredura CLI com uma única ferramenta: `naabu`, `httpx` ou `nuclei`
-- Aplicação web local: painel em localhost com saída ao vivo, histórico e gráficos
+Ele agora é centrado na aplicação web local: um console autenticado em
+localhost para varreduras manuais, agendamentos, monitoramento, histórico,
+achados, ativos e relatórios. O runner dos scanners continua sendo usado
+internamente pela aplicação web.
 
 Use o MTScan somente em sistemas que você possui ou tem permissão explícita
 para testar.
@@ -236,25 +222,14 @@ Mais detalhes estão em [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Uso Rápido
 
-Cadeia completa:
-
-```bash
-python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
-```
-
-Uma ferramenta:
-
-```bash
-python3 src/workflow.py -naabu -host example.com --top-ports 100
-python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect
-python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --json-output
-```
-
 Aplicação local:
 
 ```bash
 python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
+
+Acesse `http://127.0.0.1:8765`, entre com `admin` / `admin` e troque a senha
+quando solicitado.
 
 Abra `http://127.0.0.1:8765`.
 

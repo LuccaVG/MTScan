@@ -337,32 +337,26 @@ def print_web_app_tool_preflight():
 
 def print_main_menu():
     """Print enhanced main menu with better formatting."""
-    print("SCAN OPERATIONS:")
+    print("WEB APPLICATION:")
     print("=" * 60)
     print("  [1] Launch Local Web App")
-    print("      Start the dashboard on localhost with persisted scan history")
-    print()
-    print("  [2] Complete CLI Scan Chain   (naabu -> httpx -> nuclei)")
-    print("      Run port discovery, service analysis, and vulnerability checks")
-    print()
-    print("  [3] Single Tool CLI Scan")
-    print("      Choose naabu, httpx, or nuclei from a submenu")
+    print("      Open the authenticated monitoring console on localhost")
     print()
     print("MANAGEMENT OPERATIONS:")
     print("=" * 60)
-    print("  [4] View Previous Results")
+    print("  [2] View Previous Results")
     print("      Browse and analyze past scan results")
     print()
-    print("  [5] Update Nuclei Templates")
+    print("  [3] Update Nuclei Templates")
     print("      Download latest vulnerability templates")
     print()
-    print("  [6] Tool Configuration")
-    print("      Configure scanning parameters and settings")
+    print("  [4] Tool Configuration")
+    print("      Review local scanner and dashboard settings")
     print()
-    print("  [7] Install/Update Tools")
+    print("  [5] Install/Update Tools")
     print("      Install or update security scanning tools")
     print()
-    print("  [8] Help & Documentation")
+    print("  [6] Help & Documentation")
     print("      View usage guides and tool documentation")
     print()
     print("  [0] Exit Program")
@@ -1116,9 +1110,8 @@ def show_help():
     print("  - nuclei  - Vulnerability scanner with templates")
     print()
     print("SCAN TYPES:")
-    print("  - Complete Chain  - naabu -> httpx -> nuclei")
-    print("  - Single Tool     - Choose naabu, httpx, or nuclei")
-    print("  - Local Web App   - Dashboard, scan history, and graphs")
+    print("  - Web Console     - Dashboard, manual scans, schedules, findings, assets, and reports")
+    print("  - Scanner Engine  - naabu -> httpx -> nuclei, launched by the web app")
     print()
     print("OPTIONS:")
     print("  - Stealth Mode    - Slower, lower-rate scanning")
@@ -1134,7 +1127,6 @@ def show_help():
     print()
     print("GETTING STARTED:")
     print("  - Menu: python mtscan.py")
-    print("  - Complete CLI chain: python src/workflow.py --all -host <target>")
     print("  - Web app: python src/app_server.py --host 127.0.0.1 --port 8765")
     print()
     print("EXAMPLES:")
@@ -2441,7 +2433,7 @@ def main():
         print_tools_status()
         print_main_menu()
         
-        choice = input("Select option [0-8]: ").strip()
+        choice = input("Select option [0-6]: ").strip()
         
         if choice == "0":
             print("\nGoodbye!")
@@ -2449,26 +2441,19 @@ def main():
         elif choice == "1":
             launch_web_app()
         elif choice == "2":
-            # Complete scan chain
-            target = get_target_input()
-            if target:
-                run_scan("all", target)
-        elif choice == "3":
-            single_tool_scan_menu()
-        elif choice == "4":
             view_results()
-        elif choice == "5":
+        elif choice == "3":
             update_templates()
-        elif choice == "6":
+        elif choice == "4":
             print("\nTool Configuration")
-            print("Configuration options will be available in future updates.")
+            print("Scanner configuration is now managed from the web app.")
             input("Press Enter to continue...")
-        elif choice == "7":
+        elif choice == "5":
             install_tools()
-        elif choice == "8":
+        elif choice == "6":
             show_help()
         else:
-            print("Invalid option. Please select 0-8.")
+            print("Invalid option. Please select 0-6.")
             input("Press Enter to continue...")
 
 if __name__ == "__main__":
