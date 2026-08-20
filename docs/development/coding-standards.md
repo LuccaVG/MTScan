@@ -68,7 +68,7 @@ Filters Nuclei findings by severity.
 ### Syntax
 
 ```bash
-python3 src/workflow.py --nuclei \
+python src/workflow.py --nuclei \
   -host https://target.example \
   --severity critical,high
 ```

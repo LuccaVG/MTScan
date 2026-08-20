@@ -17,25 +17,25 @@ Normal development changes should target `develop`. Release preparation is promo
 Install Python dependencies:
 
 ```bash
-python3 -m pip install -r config/requirements.txt
+python -m pip install -r config/requirements.txt
 ```
 
 Check syntax:
 
 ```bash
-python3 -m py_compile mtscan.py install/setup.py src/workflow.py src/tool_runner.py src/app_server.py src/scan_storage.py
+python -m py_compile mtscan.py install/setup.py src/workflow.py src/tool_runner.py src/app_server.py src/scan_storage.py
 ```
 
 Run tests:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
 Preview the chain without network traffic:
 
 ```bash
-python3 src/workflow.py --all -host https://example.com --dry-run --json-output
+python src/workflow.py --all -host https://example.com --dry-run --json-output
 ```
 
 ## Code standards

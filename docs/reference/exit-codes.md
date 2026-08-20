@@ -16,7 +16,7 @@ Individual scanner return codes are captured in MTScan result metadata. The top-
 ## `--check-tools`
 
 ```bash
-python3 src/workflow.py --check-tools
+python src/workflow.py --check-tools
 ```
 
 Returns `0` when required scanner probes succeed and `1` when the tool check fails.
@@ -24,7 +24,7 @@ Returns `0` when required scanner probes succeed and `1` when the tool check fai
 ## Invalid request example
 
 ```bash
-python3 src/workflow.py --httpx -host ftp://target.example
+python src/workflow.py --httpx -host ftp://target.example
 ```
 
 Only HTTP(S) URL schemes are accepted for URL targets, so the request exits with code `2`.

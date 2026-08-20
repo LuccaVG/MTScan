@@ -3,7 +3,7 @@
 The primary command-line entry point is:
 
 ```bash
-python3 src/workflow.py [options] [target]
+python src/workflow.py [options] [target]
 ```
 
 `-host` / `--host` may be used instead of the positional target.
@@ -128,7 +128,7 @@ Filters Nuclei findings by severity before Nuclei runs.
 ### Syntax
 
 ```bash
-python3 src/workflow.py --nuclei \
+python src/workflow.py --nuclei \
   -host https://target.example \
   --severity critical,high
 ```
@@ -161,7 +161,7 @@ Requests structured JSON/JSONL scanner output where supported so MTScan can pars
 ### Syntax
 
 ```bash
-python3 src/workflow.py --all -host target.example --json-output
+python src/workflow.py --all -host target.example --json-output
 ```
 
 ### Default
@@ -181,7 +181,7 @@ Validates the scan request and prints redacted commands without running the scan
 ### Syntax
 
 ```bash
-python3 src/workflow.py --all -host https://example.com --dry-run
+python src/workflow.py --all -host https://example.com --dry-run
 ```
 
 ### Default

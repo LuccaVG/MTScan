@@ -32,7 +32,7 @@ The installer supports Debian, Ubuntu, Kali Linux, and Arch Linux. See [Installa
 ## Installation
 
 ```bash
-sudo python3 install/setup.py
+sudo python install/setup.py
 ```
 
 Review the installer before running it as root. It installs system packages, ProjectDiscovery tools, Python dependencies, and—on supported APT-based systems—a local Cassandra service.
@@ -42,19 +42,19 @@ Review the installer before running it as root. It installs system packages, Pro
 Check scanner availability:
 
 ```bash
-python3 src/workflow.py --check-tools
+python src/workflow.py --check-tools
 ```
 
 Preview a complete scan without sending traffic:
 
 ```bash
-python3 src/workflow.py --all -host https://example.com --dry-run
+python src/workflow.py --all -host https://example.com --dry-run
 ```
 
 Start the local web interface:
 
 ```bash
-python3 src/app_server.py --host 127.0.0.1 --port 8765
+python src/app_server.py --host 127.0.0.1 --port 8765
 ```
 
 On first startup, MTScan prints a randomly generated one-time password for the `admin` account to the local server console. The password must be changed after the first login.
@@ -62,7 +62,7 @@ On first startup, MTScan prints a randomly generated one-time password for the `
 Start the interactive launcher:
 
 ```bash
-python3 mtscan.py
+python mtscan.py
 ```
 
 ## Basic usage
@@ -70,19 +70,19 @@ python3 mtscan.py
 Run HTTPX against an authorized web service:
 
 ```bash
-python3 src/workflow.py --httpx -host https://target.example --title --status-code --web-server --save-output
+python src/workflow.py --httpx -host https://target.example --title --status-code --web-server --save-output
 ```
 
 Run the complete chain:
 
 ```bash
-python3 src/workflow.py --all -host target.example --json-output
+python src/workflow.py --all -host target.example --json-output
 ```
 
 Filter Nuclei findings:
 
 ```bash
-python3 src/workflow.py --nuclei -host https://target.example --severity critical,high --json-output --save-output
+python src/workflow.py --nuclei -host https://target.example --severity critical,high --json-output --save-output
 ```
 
 ## Architecture overview

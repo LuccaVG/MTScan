@@ -7,7 +7,7 @@ Run a reviewed local Nuclei template through MTScan.
 ## Run one template
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --templates ./templates/custom-check.yaml \
@@ -20,7 +20,7 @@ python3 src/workflow.py \
 ## Filter by tags
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --tags cve,misconfig \
@@ -44,7 +44,7 @@ MTScan does not sandbox Nuclei templates. Nuclei executes the template according
 ## Disable Interactsh
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --templates ./templates/custom-check.yaml \

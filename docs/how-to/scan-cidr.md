@@ -7,13 +7,13 @@ Discover services across an authorized IPv4 or IPv6 network and optionally conti
 ## Dry run first
 
 ```bash
-python3 src/workflow.py --all -host <authorized-cidr> --dry-run
+python src/workflow.py --all -host <authorized-cidr> --dry-run
 ```
 
 ## Naabu discovery
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --naabu \
   -host <authorized-cidr> \
   --top-ports 100 \
@@ -24,7 +24,7 @@ python3 src/workflow.py \
 ## Complete chain
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --all \
   -host <authorized-cidr> \
   --top-ports 100 \

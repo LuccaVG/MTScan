@@ -9,7 +9,7 @@ MTScan testing is divided into explicit categories so a passing test is not over
 Validate isolated functions and data transformations, such as target validation, redaction, parser behavior, and report normalization.
 
 ```bash
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
 ### Integration tests

@@ -23,7 +23,7 @@ MTScan configuration currently comes from CLI flags, web scan profiles, environm
 ## Web server options
 
 ```bash
-python3 src/app_server.py [--host HOST] [--port PORT] [--allow-remote] [--skip-tool-check] [--no-browser]
+python src/app_server.py [--host HOST] [--port PORT] [--allow-remote] [--skip-tool-check] [--no-browser]
 ```
 
 | Option | Default | Description |

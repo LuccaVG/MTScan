@@ -7,19 +7,19 @@ Run one scanner or the complete MTScan chain against an authorized hostname, IP 
 ## Complete chain
 
 ```bash
-python3 src/workflow.py --all -host target.example --json-output
+python src/workflow.py --all -host target.example --json-output
 ```
 
 ## Port discovery only
 
 ```bash
-python3 src/workflow.py --naabu -host target.example --top-ports 1000 --save-output
+python src/workflow.py --naabu -host target.example --top-ports 1000 --save-output
 ```
 
 ## HTTP service detection only
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --httpx \
   -host https://target.example \
   --title \
@@ -32,7 +32,7 @@ python3 src/workflow.py \
 ## Nuclei only
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --severity critical,high,medium \
@@ -43,7 +43,7 @@ python3 src/workflow.py \
 ## Use a port-specific URL
 
 ```bash
-python3 src/workflow.py --httpx -host https://target.example:8443 --status-code --save-output
+python src/workflow.py --httpx -host https://target.example:8443 --status-code --save-output
 ```
 
 ## Notes

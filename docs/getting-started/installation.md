@@ -20,7 +20,7 @@ The installer recognizes Debian, Ubuntu, Kali Linux, and Arch Linux. Live scanne
 Clone the repository and run from the project root:
 
 ```bash
-sudo python3 install/setup.py
+sudo python install/setup.py
 ```
 
 The installer can:
@@ -39,7 +39,7 @@ The installer can:
 ## Verify
 
 ```bash
-python3 src/workflow.py --check-tools
+python src/workflow.py --check-tools
 ```
 
 Expected result: Naabu, HTTPX, and Nuclei are reported as available.
@@ -47,8 +47,8 @@ Expected result: Naabu, HTTPX, and Nuclei are reported as available.
 You can also verify Python syntax and tests:
 
 ```bash
-python3 -m py_compile mtscan.py src/workflow.py src/tool_runner.py src/app_server.py src/scan_storage.py
-python3 -m unittest discover -s tests -v
+python -m py_compile mtscan.py src/workflow.py src/tool_runner.py src/app_server.py src/scan_storage.py
+python -m unittest discover -s tests -v
 ```
 
 ## PATH troubleshooting

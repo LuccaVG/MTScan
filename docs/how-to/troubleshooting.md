@@ -5,7 +5,7 @@
 Run:
 
 ```bash
-python3 src/workflow.py --check-tools
+python src/workflow.py --check-tools
 ```
 
 Then verify PATH:
@@ -25,7 +25,7 @@ Some Linux distributions package an unrelated program named `httpx`. MTScan prob
 Use `--skip-network-check` only when you understand why the check is failing, such as an isolated lab with no Internet route:
 
 ```bash
-python3 src/workflow.py --httpx -host http://127.0.0.1:18080 --skip-network-check
+python src/workflow.py --httpx -host http://127.0.0.1:18080 --skip-network-check
 ```
 
 The flag skips MTScan's preflight check; it does not make an unreachable scanner target reachable.
@@ -35,7 +35,7 @@ The flag skips MTScan's preflight check; it does not make an unreachable scanner
 This is intentional. The default security boundary is loopback.
 
 ```bash
-python3 src/app_server.py --host 0.0.0.0 --port 8765 --allow-remote
+python src/app_server.py --host 0.0.0.0 --port 8765 --allow-remote
 ```
 
 Only do this on a trusted lab network or behind a separately secured reverse proxy.
@@ -58,7 +58,7 @@ Or explicitly select file storage:
 
 ```bash
 export MTSCAN_STORAGE_BACKEND=file
-python3 src/app_server.py
+python src/app_server.py
 ```
 
 ## Nuclei finds no CVEs

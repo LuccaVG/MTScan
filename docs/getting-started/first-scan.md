@@ -7,13 +7,13 @@ This tutorial explains the complete MTScan chain. Use an isolated lab asset that
 Record the authorized target, allowed ports, time window, expected traffic level, and whether vulnerability templates are allowed. Start with a dry run.
 
 ```bash
-python3 src/workflow.py --all -host <authorized-target> --dry-run
+python src/workflow.py --all -host <authorized-target> --dry-run
 ```
 
 ## Run the chain
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --all \
   -host <authorized-target> \
   --json-output

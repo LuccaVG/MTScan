@@ -7,7 +7,7 @@ Make MTScan request structured scanner output so vulnerability reports can inclu
 ## Enable structured mode
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --all \
   -host target.example \
   --json-output
@@ -16,7 +16,7 @@ python3 src/workflow.py \
 For a Nuclei-only scan:
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --json-output \
@@ -34,7 +34,7 @@ Therefore, do not treat `--json-output` as a guarantee that `naabu_results.json`
 For Nuclei findings, use an explicit upstream export that MTScan does not treat as a conventional intermediate, for example SARIF:
 
 ```bash
-python3 src/workflow.py \
+python src/workflow.py \
   --nuclei \
   -host https://target.example \
   --json-output \
