@@ -135,7 +135,9 @@ jobs:
           --output pip-audit.json
 
       - name: Run Bandit medium-confidence scan
+        id: bandit
         if: always()
+        continue-on-error: true
         run: >
           bandit
           -r commands install src tests mtscan.py
@@ -143,6 +145,10 @@ jobs:
           --confidence-level medium
           --format json
           --output bandit.json
+
+      - name: Show Bandit findings
+        if: always() && hashFiles('bandit.json') != ''
+        run: python -m json.tool bandit.json
 
       - name: Upload Python security reports
         uses: actions/upload-artifact@v5
@@ -153,6 +159,12 @@ jobs:
             pip-audit.json
             bandit.json
           if-no-files-found: ignore
+
+      - name: Fail if Bandit found issues
+        if: steps.bandit.outcome == 'failure'
+        run: |
+          echo "Bandit detected medium-or-higher security findings."
+          exit 1
 
   dependency-review:
     name: Dependency Review
