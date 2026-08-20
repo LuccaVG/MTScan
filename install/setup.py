@@ -1365,7 +1365,7 @@ def create_configuration_files() -> bool:
         print(f"{Colors.GREEN} Configuration file created: {config_file}{Colors.END}")
         aliases_content = '''#!/bin/bash
 # Vulnerability Analysis Toolkit Aliases
-alias vat-scan="python3 $(find . -name 'workflow.py' 2>/dev/null | head -1)"
+alias mtscan-web="python3 $(find . -path '*/src/app_server.py' 2>/dev/null | head -1)"
 alias vat-naabu="naabu"
 alias vat-httpx="httpx"
 alias vat-nuclei="nuclei"
@@ -1464,11 +1464,11 @@ def print_success_message():
     print(f"{Colors.WHITE}1. Navigate to the project directory{Colors.END}")
     print(f"{Colors.WHITE}2. Test: python3 src/workflow.py --check-tools{Colors.END}")
     print(f"{Colors.WHITE}3. Open the menu: python3 mtscan.py{Colors.END}")
-    print(f"{Colors.WHITE}4. Run scans: python3 src/workflow.py --all -host <target>{Colors.END}")
+    print(f"{Colors.WHITE}4. Launch the web console: python3 src/app_server.py{Colors.END}")
     print(f"{Colors.WHITE}5. Check config/optimized_config.json for settings{Colors.END}")
     print(f"\n{Colors.CYAN}Example Usage:{Colors.END}")
-    print(f"{Colors.WHITE}  python3 src/workflow.py --all -host example.com --top-ports 100 --save-output{Colors.END}")
-    print(f"{Colors.WHITE}  python3 src/workflow.py -httpx -host example.com --title --status-code{Colors.END}")
+    print(f"{Colors.WHITE}  python3 mtscan.py{Colors.END}")
+    print(f"{Colors.WHITE}  python3 src/app_server.py --host 127.0.0.1 --port 8765{Colors.END}")
     print(f"\n{Colors.GREEN}{'='*80}{Colors.END}")
 
 def check_disk_space(min_gb: float = 2.0) -> bool:

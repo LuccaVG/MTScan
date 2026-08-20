@@ -10,11 +10,14 @@ still goes through src.tool_runner rather than shelling out to the CLI.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import datetime as _dt
 import ipaddress
 import json
 import mimetypes
 import re
+import secrets
 import threading
 import traceback
 import uuid
@@ -45,15 +48,35 @@ MAX_BODY_BYTES = 64 * 1024
 MAX_LOG_LINES = 2000
 MAX_RETAINED_JOBS = 100
 HEALTH_CACHE_SECONDS = 10.0
+SCHEDULER_TICK_SECONDS = 10.0
+SESSION_SECONDS = 12 * 60 * 60
+AUTH_ITERATIONS = 200_000
+DEFAULT_USERNAME = "admin"
+DEFAULT_PASSWORD = "admin"
+MIN_PASSWORD_LENGTH = 8
+SESSION_COOKIE_NAME = "mtscan_session"
 SCAN_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
+SCHEDULE_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
 WINDOWS_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:\\[^\s\"'<>|]+")
 UNIX_PATH_PATTERN = re.compile(r"(?<!:)\/(?:home|root|tmp|var|opt|mnt|Users|usr)\/[^\s\"'<>|]+")
 SECRET_VALUE_PATTERN = re.compile(r"(?i)\b(authorization|cookie|token|api[-_]?key|secret|password)(\s*[:=]\s*)([^\s,;]+)")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SCAN_MODES = {"chain", "naabu", "httpx", "nuclei"}
+PROFILE_NAMES = {"default", "fast", "stealth", "deep"}
 PROFILE_OPTIONS: Dict[str, Dict[str, object]] = {
     "default": {
         "top_ports": "1000",
+        "severity": "critical,high,medium",
+        "tags": "exposure,misconfig",
+        "protocol_types": "http",
+        "nuclei_rate_limit": 75,
+        "nuclei_timeout": 8,
+        "nuclei_retries": 0,
+        "concurrency": 10,
+        "parallel_processing": 10,
+        "nuclei_run_timeout": 900,
+        "no_interactsh": True,
+        "disable_update_check": True,
         "title": True,
         "status_code": True,
         "tech_detect": True,
@@ -64,6 +87,17 @@ PROFILE_OPTIONS: Dict[str, Dict[str, object]] = {
         "rate": 2000,
         "threads": 50,
         "timeout": 300,
+        "severity": "critical,high",
+        "tags": "exposure,misconfig,panel",
+        "protocol_types": "http",
+        "nuclei_rate_limit": 100,
+        "nuclei_timeout": 6,
+        "nuclei_retries": 0,
+        "concurrency": 8,
+        "parallel_processing": 8,
+        "nuclei_run_timeout": 600,
+        "no_interactsh": True,
+        "disable_update_check": True,
         "title": True,
         "status_code": True,
         "tech_detect": True,
@@ -73,10 +107,17 @@ PROFILE_OPTIONS: Dict[str, Dict[str, object]] = {
         "rate": 10,
         "threads": 25,
         "scan_type": "connect",
+        "severity": "critical,high,medium",
+        "tags": "exposure,misconfig",
+        "protocol_types": "http",
         "nuclei_rate_limit": 5,
+        "nuclei_timeout": 8,
+        "nuclei_retries": 0,
         "concurrency": 5,
         "parallel_processing": 5,
+        "nuclei_run_timeout": 900,
         "no_interactsh": True,
+        "disable_update_check": True,
         "title": True,
         "status_code": True,
         "tech_detect": True,
@@ -84,6 +125,16 @@ PROFILE_OPTIONS: Dict[str, Dict[str, object]] = {
     "deep": {
         "ports": "all",
         "timeout": 1800,
+        "severity": "critical,high,medium,low",
+        "protocol_types": "http",
+        "nuclei_rate_limit": 50,
+        "nuclei_timeout": 10,
+        "nuclei_retries": 0,
+        "concurrency": 12,
+        "parallel_processing": 12,
+        "nuclei_run_timeout": 1800,
+        "no_interactsh": True,
+        "disable_update_check": True,
         "title": True,
         "status_code": True,
         "tech_detect": True,
@@ -101,6 +152,15 @@ OPTION_KEYS = {
     "severity",
     "templates",
     "tags",
+    "protocol_types",
+    "nuclei_rate_limit",
+    "nuclei_timeout",
+    "nuclei_retries",
+    "nuclei_run_timeout",
+    "concurrency",
+    "parallel_processing",
+    "no_interactsh",
+    "disable_update_check",
     "tool_silent",
     "follow_redirects",
     "content_length",
@@ -163,6 +223,11 @@ JOBS_LOCK = threading.RLock()
 STORE = scan_storage.create_store()
 HEALTH_CACHE_LOCK = threading.Lock()
 HEALTH_CACHE: Dict[str, object] = {"expires": 0.0, "payload": None}
+AUTH_LOCK = threading.RLock()
+SESSIONS: Dict[str, Dict[str, object]] = {}
+SCHEDULE_LOCK = threading.RLock()
+RUNNING_SCHEDULES: Dict[str, str] = {}
+SCHEDULER_STOP = threading.Event()
 
 
 def requested_tools_for_mode(mode: str) -> Sequence[str]:
@@ -202,10 +267,209 @@ def build_scan_options(payload: Dict[str, object]) -> Dict[str, object]:
             value = raw_options.get(key)
             if value not in (None, ""):
                 options[key] = value
-    for key in ("tool_silent", "follow_redirects", "content_length", "response_time", "force_tools"):
+    for key in (
+        "tool_silent",
+        "follow_redirects",
+        "content_length",
+        "response_time",
+        "force_tools",
+        "no_interactsh",
+        "disable_update_check",
+    ):
         if key in options:
             options[key] = as_bool(options[key])
     return options
+
+
+def now_iso() -> str:
+    return _dt.datetime.now().isoformat(timespec="seconds")
+
+
+def parse_time(value: object) -> Optional[_dt.datetime]:
+    if isinstance(value, _dt.datetime):
+        return value if value.tzinfo else value.replace(tzinfo=None)
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def next_run_time(interval_hours: int, from_time: Optional[_dt.datetime] = None) -> str:
+    base = from_time or _dt.datetime.now()
+    return (base + _dt.timedelta(hours=interval_hours)).isoformat(timespec="seconds")
+
+
+def password_hash(password: str, salt: Optional[str] = None, iterations: int = AUTH_ITERATIONS) -> Dict[str, object]:
+    salt_text = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_text), iterations)
+    return {
+        "algorithm": "pbkdf2_sha256",
+        "iterations": iterations,
+        "salt": salt_text,
+        "hash": digest.hex(),
+    }
+
+
+def verify_password(record: Dict[str, object], password: str) -> bool:
+    password_record = record.get("password")
+    if not isinstance(password_record, dict):
+        return False
+    salt = str(password_record.get("salt") or "")
+    expected = str(password_record.get("hash") or "")
+    try:
+        iterations = int(password_record.get("iterations") or AUTH_ITERATIONS)
+        actual = password_hash(password, salt=salt, iterations=iterations).get("hash")
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(str(actual), expected)
+
+
+def default_auth_record() -> Dict[str, object]:
+    created_at = now_iso()
+    return {
+        "username": DEFAULT_USERNAME,
+        "password": password_hash(DEFAULT_PASSWORD),
+        "must_change_password": True,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+
+
+def load_auth_record() -> Dict[str, object]:
+    with AUTH_LOCK:
+        try:
+            record = STORE.get_auth()  # type: ignore[attr-defined]
+        except Exception:
+            record = None
+        if isinstance(record, dict) and record.get("username") and record.get("password"):
+            return record
+        record = default_auth_record()
+        try:
+            STORE.save_auth(record)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return record
+
+
+def save_auth_record(record: Dict[str, object]) -> None:
+    with AUTH_LOCK:
+        record["updated_at"] = now_iso()
+        STORE.save_auth(record)  # type: ignore[attr-defined]
+
+
+def public_auth_state(record: Optional[Dict[str, object]] = None, authenticated: bool = True) -> Dict[str, object]:
+    data = record or load_auth_record()
+    return {
+        "authenticated": authenticated,
+        "username": str(data.get("username") or DEFAULT_USERNAME),
+        "must_change_password": bool(data.get("must_change_password", True)),
+    }
+
+
+def create_session(username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    with AUTH_LOCK:
+        SESSIONS[token] = {
+            "username": username,
+            "expires": monotonic() + SESSION_SECONDS,
+        }
+    return token
+
+
+def session_for_token(token: str) -> Optional[Dict[str, object]]:
+    if not token:
+        return None
+    now = monotonic()
+    with AUTH_LOCK:
+        session = SESSIONS.get(token)
+        if not session:
+            return None
+        expires = float(session.get("expires") or 0)
+        if expires < now:
+            SESSIONS.pop(token, None)
+            return None
+        session["expires"] = now + SESSION_SECONDS
+        return session.copy()
+
+
+def delete_session(token: str) -> None:
+    if not token:
+        return
+    with AUTH_LOCK:
+        SESSIONS.pop(token, None)
+
+
+def validate_new_password(password: object) -> str:
+    text = str(password or "")
+    if len(text) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"New password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    if text == DEFAULT_PASSWORD:
+        raise ValueError("New password cannot be the default password.")
+    return text
+
+
+def clean_schedule_payload(payload: Dict[str, object], existing: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    source = existing.copy() if existing else {}
+    source.update(payload)
+    mode = str(source.get("mode") or "chain").lower()
+    if mode not in SCAN_MODES:
+        raise tool_runner.ScanInputError("Mode must be chain, naabu, httpx, or nuclei.")
+    profile = str(source.get("profile") or "default").lower()
+    if profile not in PROFILE_NAMES:
+        profile = "default"
+    raw_interval = source.get("interval_hours", 1)
+    try:
+        interval_hours = int(raw_interval)
+    except (TypeError, ValueError):
+        raise ValueError("Interval must be a number of hours.")
+    if interval_hours < 1 or interval_hours > 720:
+        raise ValueError("Interval must be between 1 and 720 hours.")
+
+    options = build_scan_options({**source, "profile": profile})
+    target = tool_runner.validate_scan_request(source.get("target"), options)
+    created_at = str(source.get("created_at") or now_iso())
+    enabled = as_bool(source.get("enabled"), True)
+    schedule_id = str(source.get("id") or uuid.uuid4().hex[:12])
+    if not SCHEDULE_ID_PATTERN.match(schedule_id):
+        schedule_id = uuid.uuid4().hex[:12]
+    existing_next = source.get("next_run_at")
+    next_run_at = str(existing_next) if enabled and existing_next else (next_run_time(interval_hours) if enabled else "")
+    name = str(source.get("name") or f"{target} {mode.upper()}").strip()
+
+    return {
+        "id": schedule_id,
+        "name": name,
+        "target": target,
+        "mode": mode,
+        "profile": profile,
+        "options": options,
+        "interval_hours": interval_hours,
+        "enabled": enabled,
+        "dry_run": as_bool(source.get("dry_run")),
+        "json_output": as_bool(source.get("json_output"), True),
+        "created_at": created_at,
+        "updated_at": now_iso(),
+        "last_run_at": source.get("last_run_at"),
+        "next_run_at": next_run_at or None,
+        "last_scan_id": source.get("last_scan_id"),
+        "last_status": source.get("last_status"),
+    }
+
+
+def schedule_payload(schedule: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "target": schedule.get("target"),
+        "mode": schedule.get("mode") or "chain",
+        "profile": schedule.get("profile") or "default",
+        "dry_run": bool(schedule.get("dry_run")),
+        "json_output": bool(schedule.get("json_output", True)),
+        "options": schedule.get("options") if isinstance(schedule.get("options"), dict) else {},
+    }
 
 
 def public_artifact_name(value: object) -> Optional[str]:
@@ -362,6 +626,36 @@ def persisted_scan(scan_id: str) -> Optional[Dict[str, object]]:
     return public_scan_record(scan) if isinstance(scan, dict) else None
 
 
+def stored_schedules(limit: int = 200) -> List[Dict[str, object]]:
+    try:
+        schedules = STORE.list_schedules(limit=limit)  # type: ignore[attr-defined]
+    except Exception:
+        return []
+    if not isinstance(schedules, list):
+        return []
+    return [schedule for schedule in schedules if isinstance(schedule, dict)]
+
+
+def stored_schedule(schedule_id: str) -> Optional[Dict[str, object]]:
+    try:
+        schedule = STORE.get_schedule(schedule_id)  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    return schedule if isinstance(schedule, dict) else None
+
+
+def save_schedule(schedule: Dict[str, object]) -> Dict[str, object]:
+    STORE.save_schedule(schedule)  # type: ignore[attr-defined]
+    return schedule
+
+
+def delete_stored_schedule(schedule_id: str) -> bool:
+    try:
+        return bool(STORE.delete_schedule(schedule_id))  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+
 def merged_scan_history() -> List[Dict[str, object]]:
     with JOBS_LOCK:
         active = [public_scan_record(job.to_dict()) for job in JOBS.values()]
@@ -377,6 +671,118 @@ def merged_scan_history() -> List[Dict[str, object]]:
     scans = list(merged.values())
     scans.sort(key=lambda item: str(item.get("finished_at") or item.get("created_at") or ""), reverse=True)
     return scans
+
+
+def scan_sort_time(scan: Dict[str, object]) -> str:
+    return str(scan.get("finished_at") or scan.get("started_at") or scan.get("created_at") or "")
+
+
+def finding_severity(finding: Dict[str, object]) -> str:
+    return str(finding.get("severity") or "unknown").lower()
+
+
+def aggregate_findings(scans: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    for scan in scans:
+        summary = scan.get("summary")
+        if not isinstance(summary, dict):
+            continue
+        findings = summary.get("findings")
+        if not isinstance(findings, list):
+            continue
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            rows.append({
+                "scan_id": scan.get("id"),
+                "target": scan.get("target"),
+                "scan_status": scan.get("status"),
+                "scan_finished_at": scan.get("finished_at") or scan.get("created_at"),
+                "severity": finding.get("severity") or "unknown",
+                "category": finding.get("category") or "Finding",
+                "name": finding.get("name") or finding.get("template_id") or "Finding",
+                "cve": finding.get("cve") or "N/A",
+                "matched_at": finding.get("matched_at") or scan.get("target"),
+            })
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    rows.sort(key=lambda row: (severity_order.get(finding_severity(row), 9), str(row.get("scan_finished_at") or "")), reverse=False)
+    return rows
+
+
+def aggregate_assets(scans: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
+    by_target: Dict[str, List[Dict[str, object]]] = {}
+    for scan in scans:
+        target = str(scan.get("target") or "")
+        if target:
+            by_target.setdefault(target, []).append(scan)
+
+    assets: List[Dict[str, object]] = []
+    for target, target_scans in by_target.items():
+        target_scans.sort(key=scan_sort_time, reverse=True)
+        latest = target_scans[0]
+        previous = target_scans[1] if len(target_scans) > 1 else {}
+        latest_summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+        previous_summary = previous.get("summary") if isinstance(previous.get("summary"), dict) else {}
+        security_findings = int(latest_summary.get("security_findings") or 0)
+        previous_findings = int(previous_summary.get("security_findings") or 0)
+        assets.append({
+            "target": target,
+            "scan_count": len(target_scans),
+            "last_scan_id": latest.get("id"),
+            "last_scan_at": latest.get("finished_at") or latest.get("created_at"),
+            "last_status": latest.get("status"),
+            "open_ports": int(latest_summary.get("open_ports") or 0),
+            "http_services": int(latest_summary.get("http_services") or 0),
+            "security_findings": security_findings,
+            "finding_delta": security_findings - previous_findings,
+            "cve_findings": int(latest_summary.get("cve_findings") or 0),
+        })
+    assets.sort(key=lambda item: int(item.get("security_findings") or 0), reverse=True)
+    return assets
+
+
+def overview_payload() -> Dict[str, object]:
+    scans = merged_scan_history()
+    schedules = stored_schedules()
+    findings = aggregate_findings(scans)
+    assets = aggregate_assets(scans)
+    severity_counts: Dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0}
+    category_counts: Dict[str, int] = {}
+
+    for scan in scans:
+        summary = scan.get("summary") if isinstance(scan.get("summary"), dict) else {}
+        raw_severity = summary.get("severity_counts") if isinstance(summary.get("severity_counts"), dict) else {}
+        for key, value in raw_severity.items():
+            label = str(key or "unknown").lower()
+            severity_counts[label] = severity_counts.get(label, 0) + int(value or 0)
+        raw_categories = summary.get("category_counts") if isinstance(summary.get("category_counts"), dict) else {}
+        for key, value in raw_categories.items():
+            label = str(key or "Other")
+            category_counts[label] = category_counts.get(label, 0) + int(value or 0)
+
+    metrics = {
+        "total_scans": len(scans),
+        "total_assets": len(assets),
+        "active_schedules": len([item for item in schedules if item.get("enabled")]),
+        "security_findings": sum(int((scan.get("summary") or {}).get("security_findings") or 0) for scan in scans if isinstance(scan.get("summary"), dict)),
+        "critical_findings": severity_counts.get("critical", 0),
+        "high_findings": severity_counts.get("high", 0),
+        "open_ports": sum(int((scan.get("summary") or {}).get("open_ports") or 0) for scan in scans if isinstance(scan.get("summary"), dict)),
+        "http_services": sum(int((scan.get("summary") or {}).get("http_services") or 0) for scan in scans if isinstance(scan.get("summary"), dict)),
+    }
+    high_findings = [item for item in findings if finding_severity(item) in {"critical", "high"}]
+    return {
+        "metrics": metrics,
+        "severity_counts": severity_counts,
+        "category_counts": category_counts,
+        "latest_scan": scans[0] if scans else None,
+        "recent_scans": scans[:20],
+        "recent_high_findings": high_findings[:10],
+        "findings": findings[:500],
+        "assets": assets,
+        "schedules": schedules,
+        "health": health_payload(),
+    }
 
 
 def prune_jobs() -> None:
@@ -429,6 +835,9 @@ def _fresh_health_payload() -> Dict[str, object]:
         "detail": sanitize_log_line(raw_storage.get("detail") or ""),
         "keyspace": raw_storage.get("keyspace"),
         "imported_file_history": raw_storage.get("imported_file_history"),
+        "path": public_artifact_name(raw_storage.get("path")),
+        "schedule_path": public_artifact_name(raw_storage.get("schedule_path")),
+        "auth_path": public_artifact_name(raw_storage.get("auth_path")),
     }
     return {
         "platform": "linux" if tool_runner.is_linux() else "non-linux",
@@ -577,6 +986,119 @@ def run_job(job: ScanJob) -> None:
         persist_job(job)
 
 
+def refresh_schedule_status(schedule_id: str, status: str, scan_id: Optional[str] = None) -> None:
+    schedule = stored_schedule(schedule_id)
+    if not schedule:
+        return
+    schedule["last_status"] = status
+    if scan_id:
+        schedule["last_scan_id"] = scan_id
+    schedule["updated_at"] = now_iso()
+    try:
+        save_schedule(schedule)
+    except Exception:
+        traceback.print_exc()
+
+
+def watch_schedule_job(schedule_id: str, scan_id: str) -> None:
+    final_status = "unknown"
+    try:
+        while not SCHEDULER_STOP.wait(2.0):
+            with JOBS_LOCK:
+                job = JOBS.get(scan_id)
+            if not job:
+                stored = persisted_scan(scan_id)
+                if stored:
+                    final_status = str(stored.get("status") or "completed")
+                    break
+                continue
+            with job.lock:
+                status = job.status
+            if status not in {"queued", "running"}:
+                final_status = status
+                break
+    finally:
+        refresh_schedule_status(schedule_id, final_status, scan_id)
+        with SCHEDULE_LOCK:
+            RUNNING_SCHEDULES.pop(schedule_id, None)
+
+
+def start_schedule_scan(schedule: Dict[str, object], manual: bool = False) -> ScanJob:
+    schedule_id = str(schedule.get("id") or "")
+    if not schedule_id:
+        raise ValueError("Schedule not found.")
+    with SCHEDULE_LOCK:
+        if schedule_id in RUNNING_SCHEDULES:
+            raise RuntimeError("Schedule already has a running scan.")
+        RUNNING_SCHEDULES[schedule_id] = ""
+
+    try:
+        job = create_job(schedule_payload(schedule))
+        interval = int(schedule.get("interval_hours") or 1)
+        run_time = now_iso()
+        schedule["last_run_at"] = run_time
+        schedule["last_scan_id"] = job.id
+        schedule["last_status"] = "queued"
+        schedule["next_run_at"] = next_run_time(interval)
+        schedule["updated_at"] = run_time
+        save_schedule(schedule)
+        with SCHEDULE_LOCK:
+            RUNNING_SCHEDULES[schedule_id] = job.id
+        watcher = threading.Thread(target=watch_schedule_job, args=(schedule_id, job.id), daemon=True)
+        watcher.start()
+        return job
+    except Exception:
+        with SCHEDULE_LOCK:
+            RUNNING_SCHEDULES.pop(schedule_id, None)
+        schedule["last_status"] = "failed"
+        schedule["updated_at"] = now_iso()
+        try:
+            save_schedule(schedule)
+        except Exception:
+            pass
+        raise
+
+
+def reschedule_missed_schedules() -> None:
+    now = _dt.datetime.now()
+    for schedule in stored_schedules():
+        if not schedule.get("enabled"):
+            continue
+        next_time = parse_time(schedule.get("next_run_at"))
+        if next_time and next_time > now:
+            continue
+        schedule["next_run_at"] = next_run_time(int(schedule.get("interval_hours") or 1), now)
+        schedule["updated_at"] = now_iso()
+        try:
+            save_schedule(schedule)
+        except Exception:
+            traceback.print_exc()
+
+
+def scheduler_loop() -> None:
+    reschedule_missed_schedules()
+    while not SCHEDULER_STOP.wait(SCHEDULER_TICK_SECONDS):
+        now = _dt.datetime.now()
+        for schedule in stored_schedules():
+            if not schedule.get("enabled"):
+                continue
+            due = parse_time(schedule.get("next_run_at"))
+            if not due or due > now:
+                continue
+            try:
+                start_schedule_scan(schedule)
+            except RuntimeError:
+                continue
+            except Exception:
+                traceback.print_exc()
+
+
+def start_scheduler() -> threading.Thread:
+    thread = threading.Thread(target=scheduler_loop, daemon=True)
+    thread.start()
+    return thread
+
+
 class MTScanHandler(BaseHTTPRequestHandler):
     server_version = "MTScanApp"
 
@@ -605,12 +1127,132 @@ class MTScanHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Forbidden."}, HTTPStatus.FORBIDDEN)
         return True
 
+    def cookie_token(self) -> str:
+        raw_cookie = self.headers.get("Cookie") or ""
+        for item in raw_cookie.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.strip().split("=", 1)
+            if key == SESSION_COOKIE_NAME:
+                return value
+        return ""
+
+    def current_session(self) -> Optional[Dict[str, object]]:
+        return session_for_token(self.cookie_token())
+
+    def set_session_header(self, token: str) -> str:
+        return f"{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}"
+
+    def clear_session_header(self) -> str:
+        return f"{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+
+    def require_api_auth(self, path: str) -> bool:
+        if not path.startswith("/api/"):
+            return True
+        if path in {"/api/session", "/api/login"}:
+            return True
+        if path == "/api/logout":
+            return True
+        session = self.current_session()
+        if not session:
+            self.write_json({"error": "Authentication required.", "authenticated": False}, HTTPStatus.UNAUTHORIZED)
+            return False
+        auth = load_auth_record()
+        if bool(auth.get("must_change_password")) and path != "/api/change-password":
+            self.write_json(
+                {
+                    "error": "Password change required.",
+                    "authenticated": True,
+                    "must_change_password": True,
+                },
+                HTTPStatus.FORBIDDEN,
+            )
+            return False
+        return True
+
+    def handle_session(self) -> None:
+        session = self.current_session()
+        if not session:
+            self.write_json({"authenticated": False, "must_change_password": False})
+            return
+        self.write_json(public_auth_state(load_auth_record()))
+
+    def handle_login(self) -> None:
+        try:
+            payload = self.read_json_body()
+        except ValueError as exc:
+            self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        username = str(payload.get("username") or "")
+        password = str(payload.get("password") or "")
+        auth = load_auth_record()
+        if username != str(auth.get("username") or DEFAULT_USERNAME) or not verify_password(auth, password):
+            self.write_json({"error": "Invalid username or password."}, HTTPStatus.UNAUTHORIZED)
+            return
+        token = create_session(username)
+        self.write_json(public_auth_state(auth), extra_headers={"Set-Cookie": self.set_session_header(token)})
+
+    def handle_logout(self) -> None:
+        delete_session(self.cookie_token())
+        self.write_json(
+            {"authenticated": False, "must_change_password": False},
+            extra_headers={"Set-Cookie": self.clear_session_header()},
+        )
+
+    def handle_change_password(self) -> None:
+        if not self.current_session():
+            self.write_json({"error": "Authentication required."}, HTTPStatus.UNAUTHORIZED)
+            return
+        try:
+            payload = self.read_json_body()
+            current_password = str(payload.get("current_password") or "")
+            new_password = validate_new_password(payload.get("new_password"))
+            confirm_password = payload.get("confirm_password")
+            if confirm_password is not None and str(confirm_password) != new_password:
+                raise ValueError("Password confirmation does not match.")
+            auth = load_auth_record()
+            if not verify_password(auth, current_password):
+                self.write_json({"error": "Current password is incorrect."}, HTTPStatus.BAD_REQUEST)
+                return
+            auth["password"] = password_hash(new_password)
+            auth["must_change_password"] = False
+            auth["password_changed_at"] = now_iso()
+            save_auth_record(auth)
+            self.write_json(public_auth_state(auth))
+        except ValueError as exc:
+            self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception:
+            traceback.print_exc()
+            self.write_json({"error": "Could not update password."}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def do_GET(self) -> None:
         if self.reject_if_forbidden_host():
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/api/session":
+            self.handle_session()
+            return
+        if not self.require_api_auth(parsed.path):
+            return
+        if parsed.path == "/api/overview":
+            self.write_json(overview_payload())
+            return
         if parsed.path == "/api/health":
             self.write_json(health_payload())
+            return
+        if parsed.path == "/api/schedules":
+            self.write_json({"schedules": stored_schedules()})
+            return
+        if parsed.path.startswith("/api/schedules/"):
+            schedule_id = parsed.path.rsplit("/", 1)[-1]
+            if not SCHEDULE_ID_PATTERN.match(schedule_id):
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            schedule = stored_schedule(schedule_id)
+            if not schedule:
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            self.write_json(schedule)
             return
         if parsed.path == "/api/scans":
             self.write_json({"scans": merged_scan_history()})
@@ -637,6 +1279,44 @@ class MTScanHandler(BaseHTTPRequestHandler):
         if self.reject_if_forbidden_host():
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/api/login":
+            self.handle_login()
+            return
+        if parsed.path == "/api/logout":
+            self.handle_logout()
+            return
+        if parsed.path == "/api/change-password":
+            self.handle_change_password()
+            return
+        if not self.require_api_auth(parsed.path):
+            return
+        if parsed.path == "/api/schedules":
+            try:
+                payload = self.read_json_body()
+                schedule = save_schedule(clean_schedule_payload(payload))
+                self.write_json(schedule, HTTPStatus.CREATED)
+            except tool_runner.ScanInputError as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except ValueError as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path.startswith("/api/schedules/") and parsed.path.endswith("/run"):
+            schedule_id = parsed.path.split("/")[-2]
+            if not SCHEDULE_ID_PATTERN.match(schedule_id):
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            schedule = stored_schedule(schedule_id)
+            if not schedule:
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                job = start_schedule_scan(schedule, manual=True)
+                self.write_json({"scan": job.to_dict(), "schedule": stored_schedule(schedule_id)})
+            except RuntimeError as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+            except (tool_runner.ScanInputError, ValueError) as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path != "/api/scans":
             self.write_json({"error": "Endpoint not found."}, HTTPStatus.NOT_FOUND)
             return
@@ -662,10 +1342,51 @@ class MTScanHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         if self.reject_if_forbidden_host():
             return
+        parsed = urlparse(self.path)
+        if not self.require_api_auth(parsed.path):
+            return
+        if parsed.path.startswith("/api/schedules/"):
+            schedule_id = parsed.path.rsplit("/", 1)[-1]
+            if not SCHEDULE_ID_PATTERN.match(schedule_id):
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            existing = stored_schedule(schedule_id)
+            if not existing:
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                payload = self.read_json_body()
+                payload["id"] = schedule_id
+                if any(key in payload for key in ("interval_hours", "enabled", "target", "mode", "profile", "options", "dry_run", "json_output")):
+                    payload["next_run_at"] = None
+                schedule = save_schedule(clean_schedule_payload(payload, existing))
+                self.write_json(schedule)
+            except tool_runner.ScanInputError as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except ValueError as exc:
+                self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         self.write_json({"error": "Method not allowed."}, HTTPStatus.METHOD_NOT_ALLOWED)
 
     def do_DELETE(self) -> None:
         if self.reject_if_forbidden_host():
+            return
+        parsed = urlparse(self.path)
+        if not self.require_api_auth(parsed.path):
+            return
+        if parsed.path.startswith("/api/schedules/"):
+            schedule_id = parsed.path.rsplit("/", 1)[-1]
+            if not SCHEDULE_ID_PATTERN.match(schedule_id):
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            with SCHEDULE_LOCK:
+                if schedule_id in RUNNING_SCHEDULES:
+                    self.write_json({"error": "Schedule has a running scan."}, HTTPStatus.CONFLICT)
+                    return
+            if not delete_stored_schedule(schedule_id):
+                self.write_json({"error": "Schedule not found."}, HTTPStatus.NOT_FOUND)
+                return
+            self.write_json({"deleted": True})
             return
         self.write_json({"error": "Method not allowed."}, HTTPStatus.METHOD_NOT_ALLOWED)
 
@@ -727,11 +1448,18 @@ class MTScanHandler(BaseHTTPRequestHandler):
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         )
 
-    def write_json(self, data: Dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
+    def write_json(
+        self,
+        data: Dict[str, object],
+        status: HTTPStatus = HTTPStatus.OK,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> None:
         payload = json.dumps(data, ensure_ascii=True).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.send_security_headers()
         self.end_headers()
         self.safe_write(payload)
@@ -765,6 +1493,8 @@ def main() -> None:
     if not args.skip_tool_check:
         print_startup_tool_check()
 
+    load_auth_record()
+
     try:
         server = ThreadingHTTPServer((args.host, args.port), MTScanHandler)
     except OSError as exc:
@@ -778,12 +1508,14 @@ def main() -> None:
     print(f"MTScan app listening at {url}")
     if not args.no_browser:
         open_browser(url)
+    start_scheduler()
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping MTScan app.")
     finally:
+        SCHEDULER_STOP.set()
         server.server_close()
 
 

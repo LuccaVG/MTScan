@@ -2,14 +2,12 @@
 
 ## English
 
-MTScan has three user-facing paths:
+MTScan is now used through the authenticated local web app. Option `[1]` in
+`mtscan.py` starts the console for manual scans, recurring schedules, monitoring,
+findings, assets, and reports.
 
-- Option `[1]` in `mtscan.py`: complete CLI chain
-- Option `[2]` in `mtscan.py`: single-tool CLI scan
-- Option `[3]` in `mtscan.py`: local web app
-
-The same scanner runner powers the menu, direct CLI, and app, so output and
-reporting stay consistent.
+The same scanner runner powers the web app, so scan output and reporting stay
+consistent while the user-facing scan workflow stays in the browser.
 
 ## Target Rules
 
@@ -25,15 +23,18 @@ https://example.com
 
 Use only targets you own or have explicit written permission to assess.
 
-## Complete CLI Chain
+## Web Console Scans
 
-Run `naabu`, then `httpx`, then `nuclei`:
+Launch the local app:
 
 ```bash
-python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
+python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
 
-The chain works like this:
+Open `http://127.0.0.1:8765`, sign in with `admin` / `admin`, and change the
+password when prompted.
+
+The chain mode works like this:
 
 1. `naabu` discovers open ports.
 2. `httpx` checks discovered services for HTTP or HTTPS.
@@ -42,32 +43,6 @@ The chain works like this:
 
 If no intermediate targets are discovered, MTScan falls back to the original
 target where that makes sense.
-
-## Single-Tool CLI Scans
-
-Port discovery:
-
-```bash
-python3 src/workflow.py -naabu -host example.com --top-ports 100 --save-output
-```
-
-HTTP service analysis:
-
-```bash
-python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect --save-output --json-output
-```
-
-Nuclei vulnerability assessment:
-
-```bash
-python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --save-output --json-output
-```
-
-Dry run:
-
-```bash
-python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output
-```
 
 ## Interactive Menu
 
@@ -80,12 +55,11 @@ python3 mtscan.py
 Main choices:
 
 - `[1] Launch Local Web App`: starts the dashboard on localhost with persisted history
-- `[2] Complete CLI Scan Chain`: runs `naabu -> httpx -> nuclei`
-- `[3] Single Tool CLI Scan`: opens a submenu for `naabu`, `httpx`, or `nuclei`
-- `[4] View Previous Results`: opens saved `results_*` folders
-- `[5] Update Nuclei Templates`: runs nuclei template update
-- `[7] Install/Update Tools`: updates scanner binaries or reruns setup tasks
-- `[8] Help & Documentation`: prints a local quick reference
+- `[2] View Previous Results`: opens saved `results_*` folders
+- `[3] Update Nuclei Templates`: runs nuclei template update
+- `[4] Tool Configuration`: points configuration work to the web console
+- `[5] Install/Update Tools`: updates scanner binaries or reruns setup tasks
+- `[6] Help & Documentation`: prints a local quick reference
 
 ## Local Web App
 
@@ -104,11 +78,16 @@ http://127.0.0.1:8765
 The app supports:
 
 - Chain and single-tool scans
+- Recurring scan schedules
+- Dashboard, findings, assets, reports, and settings views
 - Dry-run previews
 - Live output
-- Public scan summaries
+- Sanitized scan summaries
 - Historical graph data
 - Storage status in health output
+
+The default login is `admin` / `admin`. The app requires a password change
+after the first successful login.
 
 The app is local-first and redacts local paths and sensitive command values from
 API responses.
@@ -215,14 +194,12 @@ vulnerable application. Expected report counts are 4 security findings
 
 ## Português do Brasil
 
-O MTScan tem três caminhos principais de uso:
+O MTScan agora é usado pela aplicação web local autenticada. A opção `[1]` no
+`mtscan.py` inicia o console para varreduras manuais, agendamentos, monitoramento,
+achados, ativos e relatórios.
 
-- Opção `[1]` no `mtscan.py`: aplicação web local
-- Opção `[2]` no `mtscan.py`: cadeia CLI completa
-- Opção `[3]` no `mtscan.py`: varredura CLI com uma única ferramenta
-
-O menu, o CLI direto e a aplicação usam o mesmo runner, mantendo saída e
-relatórios consistentes.
+A aplicação usa o mesmo runner interno, mantendo saída e relatórios
+consistentes enquanto o fluxo de varredura fica no navegador.
 
 ## Regras de Alvo
 
@@ -239,13 +216,16 @@ https://example.com
 Use apenas alvos que você possui ou tem permissão explícita por escrito para
 avaliar.
 
-## Cadeia CLI Completa
+## Varreduras Pelo Console Web
 
-Executa `naabu`, depois `httpx`, depois `nuclei`:
+Inicie a aplicação local:
 
 ```bash
-python3 src/workflow.py --all -host example.com --top-ports 100 --save-output --json-output
+python3 src/app_server.py --host 127.0.0.1 --port 8765
 ```
+
+Acesse `http://127.0.0.1:8765`, entre com `admin` / `admin` e troque a senha
+quando solicitado.
 
 Fluxo da cadeia:
 
@@ -253,32 +233,6 @@ Fluxo da cadeia:
 2. `httpx` verifica serviços HTTP ou HTTPS.
 3. `nuclei` analisa URLs HTTP descobertas.
 4. MTScan escreve um único relatório: `vulnerability_report.md`.
-
-## Varreduras com Uma Ferramenta
-
-Descoberta de portas:
-
-```bash
-python3 src/workflow.py -naabu -host example.com --top-ports 100 --save-output
-```
-
-Análise HTTP:
-
-```bash
-python3 src/workflow.py -httpx -host example.com --title --status-code --tech-detect --save-output --json-output
-```
-
-Avaliação com nuclei:
-
-```bash
-python3 src/workflow.py -nuclei -host https://example.com --severity critical,high --save-output --json-output
-```
-
-Dry run:
-
-```bash
-python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output
-```
 
 ## Menu Interativo
 
@@ -291,12 +245,11 @@ python3 mtscan.py
 Opções principais:
 
 - `[1] Launch Local Web App`: inicia o painel em localhost com histórico persistente
-- `[2] Complete CLI Scan Chain`: executa `naabu -> httpx -> nuclei`
-- `[3] Single Tool CLI Scan`: abre submenu para `naabu`, `httpx` ou `nuclei`
-- `[4] View Previous Results`: abre pastas `results_*`
-- `[5] Update Nuclei Templates`: atualiza templates do nuclei
-- `[7] Install/Update Tools`: atualiza binários ou tarefas de setup
-- `[8] Help & Documentation`: mostra referência local
+- `[2] View Previous Results`: abre pastas `results_*`
+- `[3] Update Nuclei Templates`: atualiza templates do nuclei
+- `[4] Tool Configuration`: aponta configuração para o console web
+- `[5] Install/Update Tools`: atualiza binários ou tarefas de setup
+- `[6] Help & Documentation`: mostra referência local
 
 ## Aplicação Web Local
 

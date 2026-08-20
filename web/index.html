@@ -7,200 +7,379 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
+  <section id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <div class="brand-lock">
+        <span>MT</span>
+      </div>
       <h1>MTScan</h1>
-      <p id="environmentText">Checking scanner environment...</p>
-    </div>
-    <button id="refreshHealth" class="ghost-button" type="button">Refresh</button>
-  </header>
+      <p id="authMessage">Sign in to continue.</p>
 
-  <main class="layout">
-    <section class="panel controls-panel">
-      <form id="scanForm">
+      <form id="loginForm" class="auth-form">
         <label class="field">
-          <span>Target</span>
-          <input id="targetInput" name="target" type="text" autocomplete="off" placeholder="example.com" required>
+          <span>Username</span>
+          <input id="loginUsername" type="text" autocomplete="username" value="admin" required>
         </label>
-
-        <div class="field">
-          <span>Mode</span>
-          <div class="segmented" role="radiogroup" aria-label="Scan mode">
-            <label><input type="radio" name="mode" value="chain" checked><span>Chain</span></label>
-            <label><input type="radio" name="mode" value="naabu"><span>Naabu</span></label>
-            <label><input type="radio" name="mode" value="httpx"><span>HTTPX</span></label>
-            <label><input type="radio" name="mode" value="nuclei"><span>Nuclei</span></label>
-          </div>
-        </div>
-
         <label class="field">
-          <span>Profile</span>
-          <select id="profileSelect" name="profile">
-            <option value="default">Default</option>
-            <option value="fast">Fast</option>
-            <option value="stealth">Stealth</option>
-            <option value="deep">Deep</option>
-          </select>
+          <span>Password</span>
+          <input id="loginPassword" type="password" autocomplete="current-password" required>
         </label>
-
-        <div class="two-column">
-          <label class="field">
-            <span>Ports</span>
-            <input id="portsInput" name="ports" type="text" autocomplete="off" placeholder="80,443">
-          </label>
-          <label class="field">
-            <span>Top Ports</span>
-            <input id="topPortsInput" name="top_ports" type="number" min="1" max="65535" value="1000">
-          </label>
-        </div>
-
-        <div class="two-column">
-          <label class="field">
-            <span>Timeout</span>
-            <input id="timeoutInput" name="timeout" type="number" min="1" max="604800" value="900">
-          </label>
-          <label class="field">
-            <span>Tags</span>
-            <input id="tagsInput" name="tags" type="text" autocomplete="off" placeholder="cve,exposure">
-          </label>
-        </div>
-
-        <label class="field">
-          <span>Severity</span>
-          <select id="severitySelect" name="severity">
-            <option value="">Any</option>
-            <option value="critical,high">Critical and High</option>
-            <option value="critical,high,medium">Critical to Medium</option>
-            <option value="low,info">Low and Info</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Templates</span>
-          <input id="templatesInput" name="templates" type="text" autocomplete="off" placeholder="cves/ or /path/template.yaml">
-        </label>
-
-        <div class="switch-row">
-          <label class="switch">
-            <input id="dryRunInput" type="checkbox">
-            <span></span>
-            Dry run
-          </label>
-          <label class="switch">
-            <input id="jsonOutputInput" type="checkbox" checked>
-            <span></span>
-            JSON output
-          </label>
-        </div>
-
-        <div id="formError" class="form-error" aria-live="polite"></div>
-        <button class="primary-button" type="submit">Start Scan</button>
+        <div id="loginError" class="form-error" aria-live="polite"></div>
+        <button class="primary-button" type="submit">Sign In</button>
       </form>
-    </section>
 
-    <section class="panel results-panel">
-      <div class="scan-header">
+      <form id="firstPasswordForm" class="auth-form hidden">
+        <label class="field">
+          <span>Current Password</span>
+          <input id="firstCurrentPassword" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="field">
+          <span>New Password</span>
+          <input id="firstNewPassword" type="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <label class="field">
+          <span>Confirm Password</span>
+          <input id="firstConfirmPassword" type="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <div id="firstPasswordError" class="form-error" aria-live="polite"></div>
+        <button class="primary-button" type="submit">Change Password</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">MT</div>
         <div>
-          <h2 id="scanTitle">No scan selected</h2>
-          <p id="scanSubtitle">Ready</p>
-        </div>
-        <span id="scanState" class="state-badge idle">Idle</span>
-      </div>
-
-      <div class="metrics-grid">
-        <div class="metric">
-          <span>Open Ports</span>
-          <strong id="openPortsMetric">0</strong>
-        </div>
-        <div class="metric">
-          <span>HTTP Services</span>
-          <strong id="httpMetric">0</strong>
-        </div>
-        <div class="metric">
-          <span>Security Findings</span>
-          <strong id="riskMetric">0</strong>
-        </div>
-        <div class="metric">
-          <span>Observations</span>
-          <strong id="observationMetric">0</strong>
-        </div>
-        <div class="metric">
-          <span>CVE Findings</span>
-          <strong id="cveMetric">0</strong>
+          <h1>MTScan</h1>
+          <p id="environmentText">Checking scanner environment...</p>
         </div>
       </div>
-
-      <div class="chart-grid">
-        <section class="chart-panel">
-          <div class="chart-title">Severity</div>
-          <canvas id="severityChart" width="520" height="230"></canvas>
-        </section>
-        <section class="chart-panel">
-          <div class="chart-title">Surface</div>
-          <canvas id="surfaceChart" width="520" height="230"></canvas>
-        </section>
-        <section class="chart-panel">
-          <div class="chart-title">History</div>
-          <canvas id="historyChart" width="520" height="230"></canvas>
-        </section>
-        <section class="chart-panel">
-          <div class="chart-title">Finding Types</div>
-          <canvas id="categoryChart" width="520" height="230"></canvas>
-        </section>
+      <div class="top-actions">
+        <span id="userBadge" class="user-badge">admin</span>
+        <button id="refreshAll" class="ghost-button" type="button">Refresh</button>
+        <button id="logoutButton" class="ghost-button" type="button">Sign Out</button>
       </div>
+    </header>
 
-      <div class="tabs" role="tablist">
-        <button class="tab active" type="button" data-tab="output">Output</button>
-        <button class="tab" type="button" data-tab="findings">Results</button>
-        <button class="tab" type="button" data-tab="tools">Tools</button>
-        <button class="tab" type="button" data-tab="files">Files</button>
-      </div>
+    <nav class="console-tabs" aria-label="Console views">
+      <button class="console-tab active" type="button" data-view="dashboard">Dashboard</button>
+      <button class="console-tab" type="button" data-view="scan">Scan</button>
+      <button class="console-tab" type="button" data-view="schedules">Schedules</button>
+      <button class="console-tab" type="button" data-view="findings">Findings</button>
+      <button class="console-tab" type="button" data-view="assets">Assets</button>
+      <button class="console-tab" type="button" data-view="reports">Reports</button>
+      <button class="console-tab" type="button" data-view="settings">Settings</button>
+    </nav>
 
-      <section id="outputTab" class="tab-panel active">
-        <pre id="logOutput"></pre>
-      </section>
-      <section id="findingsTab" class="tab-panel">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Severity</th>
-                <th>Category</th>
-                <th>Result</th>
-                <th>CVE</th>
-                <th>Target</th>
-              </tr>
-            </thead>
-            <tbody id="findingsTable"></tbody>
-          </table>
+    <main class="workspace">
+      <section id="dashboardView" class="view active">
+        <div class="page-header">
+          <div>
+            <h2>Dashboard</h2>
+            <p>Read-only monitoring overview</p>
+          </div>
+          <span id="dashboardStorage" class="state-badge idle">Storage</span>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric"><span>Total Scans</span><strong id="totalScansMetric">0</strong></div>
+          <div class="metric"><span>Assets</span><strong id="assetMetric">0</strong></div>
+          <div class="metric"><span>Security Findings</span><strong id="totalRiskMetric">0</strong></div>
+          <div class="metric"><span>Critical</span><strong id="criticalMetric">0</strong></div>
+          <div class="metric"><span>Active Schedules</span><strong id="activeScheduleMetric">0</strong></div>
+          <div class="metric"><span>HTTP Services</span><strong id="totalHttpMetric">0</strong></div>
+        </div>
+
+        <div class="overview-grid">
+          <section class="panel chart-panel">
+            <div class="chart-title">Severity</div>
+            <canvas id="dashboardSeverityChart"></canvas>
+          </section>
+          <section class="panel chart-panel">
+            <div class="chart-title">Scan Trend</div>
+            <canvas id="dashboardHistoryChart"></canvas>
+          </section>
+          <section class="panel chart-panel">
+            <div class="chart-title">Finding Types</div>
+            <canvas id="dashboardCategoryChart"></canvas>
+          </section>
+          <section class="panel latest-panel">
+            <div class="panel-title">Latest Scan</div>
+            <div id="latestScanSummary" class="summary-block">No scans yet</div>
+          </section>
+        </div>
+
+        <div class="split-grid">
+          <section class="panel table-panel">
+            <div class="panel-title">Critical And High Findings</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Severity</th><th>Finding</th><th>Target</th><th>CVE</th></tr></thead>
+                <tbody id="dashboardFindingsTable"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel table-panel">
+            <div class="panel-title">Active Schedules</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Name</th><th>Target</th><th>Every</th><th>Next Run</th></tr></thead>
+                <tbody id="dashboardSchedulesTable"></tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
-      <section id="toolsTab" class="tab-panel">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Tool</th>
-                <th>Status</th>
-                <th>Output</th>
-                <th>Command</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody id="toolsTable"></tbody>
-          </table>
+
+      <section id="scanView" class="view">
+        <div class="page-header">
+          <div>
+            <h2>Scan</h2>
+            <p>Launch scans and inspect live output</p>
+          </div>
+          <span id="scanState" class="state-badge idle">Idle</span>
+        </div>
+
+        <div class="scan-layout">
+          <section class="panel controls-panel">
+            <form id="scanForm">
+              <label class="field">
+                <span>Target</span>
+                <input id="targetInput" name="target" type="text" autocomplete="off" placeholder="example.com" required>
+              </label>
+
+              <div class="field">
+                <span>Mode</span>
+                <div class="segmented" role="radiogroup" aria-label="Scan mode">
+                  <label><input type="radio" name="mode" value="chain" checked><span>Chain</span></label>
+                  <label><input type="radio" name="mode" value="naabu"><span>Naabu</span></label>
+                  <label><input type="radio" name="mode" value="httpx"><span>HTTPX</span></label>
+                  <label><input type="radio" name="mode" value="nuclei"><span>Nuclei</span></label>
+                </div>
+              </div>
+
+              <label class="field">
+                <span>Profile</span>
+                <select id="profileSelect" name="profile">
+                  <option value="default">Default</option>
+                  <option value="fast">Fast</option>
+                  <option value="stealth">Stealth</option>
+                  <option value="deep">Deep</option>
+                </select>
+              </label>
+
+              <div class="two-column">
+                <label class="field"><span>Ports</span><input id="portsInput" name="ports" type="text" autocomplete="off" placeholder="80,443"></label>
+                <label class="field"><span>Top Ports</span><input id="topPortsInput" name="top_ports" type="number" min="1" max="65535" value="1000"></label>
+              </div>
+
+              <div class="two-column">
+                <label class="field"><span>Timeout</span><input id="timeoutInput" name="timeout" type="number" min="1" max="604800" value="900"></label>
+                <label class="field"><span>Tags</span><input id="tagsInput" name="tags" type="text" autocomplete="off" placeholder="cve,exposure"></label>
+              </div>
+
+              <label class="field">
+                <span>Severity</span>
+                <select id="severitySelect" name="severity">
+                  <option value="">Profile default</option>
+                  <option value="critical,high">Critical and High</option>
+                  <option value="critical,high,medium">Critical to Medium</option>
+                  <option value="low,info">Low and Info</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Templates</span>
+                <input id="templatesInput" name="templates" type="text" autocomplete="off" placeholder="cves/ or /path/template.yaml">
+              </label>
+
+              <div class="switch-row">
+                <label class="switch"><input id="dryRunInput" type="checkbox"><span></span>Dry run</label>
+                <label class="switch"><input id="jsonOutputInput" type="checkbox" checked><span></span>JSON output</label>
+              </div>
+
+              <div id="formError" class="form-error" aria-live="polite"></div>
+              <button class="primary-button" type="submit">Start Scan</button>
+            </form>
+          </section>
+
+          <section class="panel results-panel">
+            <div class="scan-header">
+              <div>
+                <h3 id="scanTitle">No scan selected</h3>
+                <p id="scanSubtitle">Ready</p>
+              </div>
+            </div>
+
+            <div class="metrics-grid compact">
+              <div class="metric"><span>Open Ports</span><strong id="openPortsMetric">0</strong></div>
+              <div class="metric"><span>HTTP Services</span><strong id="httpMetric">0</strong></div>
+              <div class="metric"><span>Security Findings</span><strong id="riskMetric">0</strong></div>
+              <div class="metric"><span>CVEs</span><strong id="cveMetric">0</strong></div>
+            </div>
+
+            <div class="tabs" role="tablist">
+              <button class="tab active" type="button" data-tab="output">Output</button>
+              <button class="tab" type="button" data-tab="findings">Results</button>
+              <button class="tab" type="button" data-tab="tools">Tools</button>
+              <button class="tab" type="button" data-tab="files">Files</button>
+            </div>
+
+            <section id="outputTab" class="tab-panel active"><pre id="logOutput"></pre></section>
+            <section id="findingsTab" class="tab-panel">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Severity</th><th>Category</th><th>Result</th><th>CVE</th><th>Target</th></tr></thead>
+                  <tbody id="findingsTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section id="toolsTab" class="tab-panel">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Tool</th><th>Status</th><th>Output</th><th>Command</th><th>Notes</th></tr></thead>
+                  <tbody id="toolsTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section id="filesTab" class="tab-panel"><div id="filesList" class="files-list"></div></section>
+          </section>
+
+          <aside class="panel history-panel">
+            <div class="panel-title">Scans</div>
+            <div id="scanHistory" class="scan-history"></div>
+          </aside>
         </div>
       </section>
-      <section id="filesTab" class="tab-panel">
-        <div id="filesList" class="files-list"></div>
-      </section>
-    </section>
 
-    <aside class="panel history-panel">
-      <div class="panel-title">Scans</div>
-      <div id="scanHistory" class="scan-history"></div>
-    </aside>
-  </main>
+      <section id="schedulesView" class="view">
+        <div class="page-header">
+          <div>
+            <h2>Schedules</h2>
+            <p>Recurring scan automation</p>
+          </div>
+          <button id="clearScheduleForm" class="ghost-button" type="button">New Schedule</button>
+        </div>
+
+        <div class="schedule-layout">
+          <section class="panel controls-panel">
+            <form id="scheduleForm">
+              <input id="scheduleIdInput" type="hidden">
+              <label class="field"><span>Name</span><input id="scheduleNameInput" type="text" autocomplete="off" placeholder="Weekly edge scan"></label>
+              <label class="field"><span>Target</span><input id="scheduleTargetInput" type="text" autocomplete="off" placeholder="example.com" required></label>
+              <div class="two-column">
+                <label class="field"><span>Mode</span><select id="scheduleModeSelect"><option value="chain">Chain</option><option value="naabu">Naabu</option><option value="httpx">HTTPX</option><option value="nuclei">Nuclei</option></select></label>
+                <label class="field"><span>Profile</span><select id="scheduleProfileSelect"><option value="default">Default</option><option value="fast">Fast</option><option value="stealth">Stealth</option><option value="deep">Deep</option></select></label>
+              </div>
+              <div class="two-column">
+                <label class="field"><span>Every Hours</span><input id="scheduleIntervalInput" type="number" min="1" max="720" value="24" required></label>
+                <label class="field"><span>Top Ports</span><input id="scheduleTopPortsInput" type="number" min="1" max="65535" value="1000"></label>
+              </div>
+              <label class="field"><span>Ports</span><input id="schedulePortsInput" type="text" autocomplete="off" placeholder="80,443"></label>
+              <label class="field"><span>Severity</span><select id="scheduleSeveritySelect"><option value="">Profile default</option><option value="critical,high">Critical and High</option><option value="critical,high,medium">Critical to Medium</option><option value="low,info">Low and Info</option></select></label>
+              <label class="field"><span>Tags</span><input id="scheduleTagsInput" type="text" autocomplete="off" placeholder="cve,exposure"></label>
+              <label class="field"><span>Templates</span><input id="scheduleTemplatesInput" type="text" autocomplete="off" placeholder="cves/ or /path/template.yaml"></label>
+              <div class="switch-row">
+                <label class="switch"><input id="scheduleEnabledInput" type="checkbox" checked><span></span>Enabled</label>
+                <label class="switch"><input id="scheduleDryRunInput" type="checkbox"><span></span>Dry run</label>
+                <label class="switch"><input id="scheduleJsonOutputInput" type="checkbox" checked><span></span>JSON output</label>
+              </div>
+              <div id="scheduleError" class="form-error" aria-live="polite"></div>
+              <button class="primary-button" type="submit">Save Schedule</button>
+            </form>
+          </section>
+
+          <section class="panel table-panel">
+            <div class="panel-title">Stored Schedules</div>
+            <div class="table-wrap tall">
+              <table>
+                <thead><tr><th>Name</th><th>Target</th><th>Mode</th><th>Interval</th><th>Next Run</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody id="schedulesTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="findingsView" class="view">
+        <div class="page-header"><div><h2>Findings</h2><p>Stored vulnerability evidence</p></div></div>
+        <div class="filters-row">
+          <label class="field"><span>Severity</span><select id="findingSeverityFilter"><option value="">All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="info">Info</option></select></label>
+          <label class="field"><span>Target</span><input id="findingTargetFilter" type="text" placeholder="Filter target"></label>
+          <label class="field"><span>Search</span><input id="findingTextFilter" type="text" placeholder="CVE, category, name"></label>
+        </div>
+        <section class="panel table-panel">
+          <div class="table-wrap tall">
+            <table>
+              <thead><tr><th>Severity</th><th>Finding</th><th>Category</th><th>CVE</th><th>Target</th><th>Scan</th></tr></thead>
+              <tbody id="allFindingsTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="assetsView" class="view">
+        <div class="page-header"><div><h2>Assets</h2><p>Targets from scan history</p></div></div>
+        <section class="panel table-panel">
+          <div class="table-wrap tall">
+            <table>
+              <thead><tr><th>Target</th><th>Last Scan</th><th>Status</th><th>Ports</th><th>HTTP</th><th>Findings</th><th>Delta</th><th>Scans</th></tr></thead>
+              <tbody id="assetsTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="reportsView" class="view">
+        <div class="page-header"><div><h2>Reports</h2><p>Saved reports and artifacts</p></div></div>
+        <section class="panel table-panel">
+          <div class="table-wrap tall">
+            <table>
+              <thead><tr><th>Target</th><th>Mode</th><th>Status</th><th>Finished</th><th>Report</th><th>Artifacts</th></tr></thead>
+              <tbody id="reportsTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="settingsView" class="view">
+        <div class="page-header">
+          <div>
+            <h2>Settings</h2>
+            <p>Local app status and account controls</p>
+          </div>
+          <button id="refreshHealth" class="ghost-button" type="button">Refresh Health</button>
+        </div>
+
+        <div class="settings-grid">
+          <section class="panel status-panel">
+            <div class="panel-title">Storage</div>
+            <div id="storageStatus" class="status-list"></div>
+          </section>
+          <section class="panel status-panel">
+            <div class="panel-title">Scanner Tools</div>
+            <div id="toolStatus" class="status-list"></div>
+          </section>
+          <section class="panel status-panel">
+            <div class="panel-title">Platform</div>
+            <div id="platformStatus" class="status-list"></div>
+          </section>
+          <section class="panel status-panel">
+            <div class="panel-title">Password</div>
+            <form id="settingsPasswordForm">
+              <label class="field"><span>Current Password</span><input id="settingsCurrentPassword" type="password" autocomplete="current-password" required></label>
+              <label class="field"><span>New Password</span><input id="settingsNewPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+              <label class="field"><span>Confirm Password</span><input id="settingsConfirmPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+              <div id="settingsPasswordError" class="form-error" aria-live="polite"></div>
+              <button class="primary-button" type="submit">Update Password</button>
+            </form>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script src="/app.js"></script>
 </body>
