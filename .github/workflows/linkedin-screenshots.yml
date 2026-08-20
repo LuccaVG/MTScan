@@ -1,0 +1,203 @@
+name: LinkedIn release screenshots
+
+on:
+  push:
+    branches: [linkedin-1.0.0-alpha-screenshots]
+    paths:
+      - .github/workflows/linkedin-screenshots.yml
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: linkedin-1.0.0-alpha-screenshots
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade -r config/requirements.txt playwright
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Install ProjectDiscovery HTTPX
+        run: |
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+          mkdir -p "$HOME/bin"
+          cp "$(go env GOPATH)/bin/httpx" "$HOME/bin/httpx"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Start local target and MTScan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > /tmp/target_server.py <<'PY'
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              server_version = "MTScan-Demo/1.0"
+              def do_GET(self):
+                  body = b"<html><head><title>MTScan Local Test Server</title></head><body><h1>MTScan HTTPX Test</h1><p>Local loopback fixture.</p></body></html>"
+                  self.send_response(200)
+                  self.send_header("Content-Type", "text/html; charset=utf-8")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+              def log_message(self, fmt, *args):
+                  pass
+
+          ThreadingHTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
+          PY
+          nohup python /tmp/target_server.py > evidence/target.log 2>&1 &
+          echo $! > /tmp/target.pid
+
+          export MTSCAN_STORAGE_BACKEND=file
+          export PATH="$HOME/bin:$PATH"
+          nohup python -u src/app_server.py --host 127.0.0.1 --port 8765 --no-browser > evidence/mtscan.log 2>&1 &
+          echo $! > /tmp/mtscan.pid
+
+          for i in {1..80}; do
+            if curl -fsS http://127.0.0.1:8765/ >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          cat evidence/mtscan.log
+          exit 1
+
+      - name: Run real HTTPX scan and capture screenshots
+        env:
+          MTSCAN_STORAGE_BACKEND: file
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          import time
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          log_path = Path("evidence/mtscan.log")
+          text = log_path.read_text(encoding="utf-8", errors="replace")
+          match = re.search(r"Initial one-time password: (\S+)", text)
+          if not match:
+              raise SystemExit("Could not locate first-run credential in isolated runner log")
+          initial_password = match.group(1)
+          new_password = "MTScan-Alpha-Release-2026!"
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=1)
+              page.goto("http://127.0.0.1:8765", wait_until="networkidle")
+
+              page.fill("#loginUsername", "admin")
+              page.fill("#loginPassword", initial_password)
+              page.click("#loginForm button[type=submit]")
+              page.wait_for_selector("#firstPasswordForm:not(.hidden)")
+              page.fill("#firstNewPassword", new_password)
+              page.fill("#firstConfirmPassword", new_password)
+              page.click("#firstPasswordForm button[type=submit]")
+              page.wait_for_selector("#appShell:not(.hidden)")
+              page.wait_for_timeout(1200)
+              page.screenshot(path="evidence/01-dashboard.png", full_page=True)
+
+              # Create a real HTTPX scan through the same authenticated web API.
+              result = page.evaluate("""async () => {
+                  const response = await fetch('/api/scans', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                      target: 'http://127.0.0.1:18080',
+                      mode: 'httpx',
+                      profile: 'default',
+                      dry_run: false,
+                      json_output: true,
+                      options: {title: true, status_code: true, web_server: true, tech_detect: true}
+                    })
+                  });
+                  return await response.json();
+              }""")
+              scan_id = result['id']
+
+              deadline = time.time() + 60
+              while time.time() < deadline:
+                  scan = page.evaluate("""async (id) => {
+                    const response = await fetch('/api/scans/' + id, {credentials: 'same-origin'});
+                    return await response.json();
+                  }""", scan_id)
+                  if scan.get('status') not in ('queued', 'running'):
+                      break
+                  time.sleep(0.5)
+              else:
+                  raise SystemExit("HTTPX scan timed out")
+              if scan.get('status') != 'completed':
+                  raise SystemExit('HTTPX scan failed: ' + json.dumps(scan, indent=2))
+
+              page.reload(wait_until="networkidle")
+              page.wait_for_selector("#appShell:not(.hidden)")
+              page.click("button[data-view='scan']")
+              page.wait_for_timeout(800)
+              page.screenshot(path="evidence/02-httpx-scan.png", full_page=True)
+
+              page.click("button[data-view='reports']")
+              page.wait_for_timeout(500)
+              page.screenshot(path="evidence/03-reports.png", full_page=True)
+
+              Path("evidence/scan.json").write_text(json.dumps(scan, indent=2), encoding="utf-8")
+              browser.close()
+          PY
+
+      - name: Capture CLI evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/bin:$PATH"
+          python src/workflow.py --httpx -host http://127.0.0.1:18080 --title --status-code --web-server --skip-network-check --save-output > evidence/cli-httpx.txt 2>&1
+          cat evidence/cli-httpx.txt
+
+      - name: Render CLI screenshot
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+
+          text = Path('evidence/cli-httpx.txt').read_text(encoding='utf-8', errors='replace')
+          lines = [line.rstrip() for line in text.splitlines() if line.strip()][:38]
+          width, height = 1600, 920
+          image = Image.new('RGB', (width, height), '#0d1117')
+          draw = ImageDraw.Draw(image)
+          try:
+              font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 22)
+              title_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf', 28)
+          except Exception:
+              font = ImageFont.load_default()
+              title_font = font
+          draw.text((40, 30), 'MTScan 1.0.0 Alpha — real HTTPX loopback test', fill='#f0f6fc', font=title_font)
+          y = 90
+          for line in lines:
+              draw.text((40, y), line[:118], fill='#c9d1d9', font=font)
+              y += 30
+          image.save('evidence/04-cli-httpx.png')
+          PY
+
+      - name: Upload screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: mtscan-linkedin-screenshots
+          path: evidence/
+          if-no-files-found: error
