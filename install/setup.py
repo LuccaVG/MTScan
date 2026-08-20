@@ -36,6 +36,7 @@ import json
 import time
 import ctypes
 import urllib.request
+import http.client
 import signal
 import tempfile
 import socket
@@ -1541,8 +1542,15 @@ def write_cassandra_apt_source() -> bool:
         CASSANDRA_APT_KEYRING.parent.mkdir(parents=True, exist_ok=True)
         if not CASSANDRA_APT_KEYRING.exists():
             print(f"{Colors.WHITE}Downloading Apache Cassandra repository key...{Colors.END}")
-            with urllib.request.urlopen(CASSANDRA_APT_KEY_URL, timeout=60) as response:
+            connection = http.client.HTTPSConnection("downloads.apache.org", timeout=60)
+            try:
+                connection.request("GET", "/cassandra/KEYS")
+                response = connection.getresponse()
+                if response.status != 200:
+                    raise OSError(f"Apache Cassandra key download failed with HTTP {response.status}")
                 CASSANDRA_APT_KEYRING.write_bytes(response.read())
+            finally:
+                connection.close()
             CASSANDRA_APT_KEYRING.chmod(0o644)
 
         existing = ""
