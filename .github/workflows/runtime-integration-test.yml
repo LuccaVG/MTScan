@@ -36,6 +36,7 @@ jobs:
           #!/usr/bin/env python3
           import os
           import sys
+          from pathlib import Path
 
           tool = os.path.basename(sys.argv[0])
           args = sys.argv[1:]
@@ -52,14 +53,22 @@ jobs:
               raise SystemExit(0)
 
           if tool == "naabu":
-              print("127.0.0.1:8765")
+              output = "127.0.0.1:8765"
           elif tool in {"httpx", "httpx-toolkit"}:
-              print("http://127.0.0.1:8765 [200] [MTScan Integration Test]")
+              output = "http://127.0.0.1:8765 [200] [MTScan Integration Test]"
           elif tool == "nuclei":
-              print("[mtscan-integration-test] [http] [info] http://127.0.0.1:8765")
+              output = "[mtscan-integration-test] [http] [info] http://127.0.0.1:8765"
           else:
               print(f"unexpected stub name: {tool}", file=sys.stderr)
               raise SystemExit(2)
+
+          print(output)
+          if "-o" in args:
+              index = args.index("-o")
+              if index + 1 < len(args):
+                  destination = Path(args[index + 1])
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_text(output + "\n", encoding="utf-8")
           PY
           chmod +x "$FAKE_BIN/scanner-stub"
           for tool in naabu httpx httpx-toolkit nuclei; do
@@ -79,40 +88,32 @@ jobs:
           python src/workflow.py --help > cli-help.log
           grep -q -- '--dry-run' cli-help.log
           grep -q -- '--all' cli-help.log
-
           python src/workflow.py --all -host https://example.com --dry-run --save-output > cli-dry-run.log
           cat cli-dry-run.log
           grep -q 'Target: https://example.com' cli-dry-run.log
-          grep -Eq 'naabu.*(-host|-host )example\.com|naabu.*example\.com' cli-dry-run.log
+          grep -Eq 'naabu.*example\.com' cli-dry-run.log
 
       - name: Test CLI full chain with isolated scanner stubs
         shell: bash
         run: |
           set -euo pipefail
           rm -rf runtime-cli-results
-          python src/workflow.py \
-            --all \
-            -host 127.0.0.1 \
-            --skip-network-check \
-            --save-output \
-            --output-dir runtime-cli-results \
-            > cli-full-run.log 2>&1
+          python src/workflow.py --all -host 127.0.0.1 --skip-network-check --save-output --output-dir runtime-cli-results > cli-full-run.log 2>&1
           cat cli-full-run.log
           cat "$MTSCAN_FAKE_TOOL_LOG"
           python - <<'PY'
           from pathlib import Path
           from src import tool_runner
-
           out = Path("runtime-cli-results")
           assert out.is_dir(), "CLI output directory was not created"
           report = out / tool_runner.REPORT_FILENAME
           assert report.is_file(), f"Expected report missing: {report}"
-          raw = [p for p in out.iterdir() if p.is_file() and p.name != tool_runner.REPORT_FILENAME]
-          assert raw, "No raw scanner evidence files were retained"
+          expected = [out / "naabu_results.txt", out / "httpx_results.txt", out / "nuclei_results.txt"]
+          assert all(path.is_file() for path in expected), f"Missing raw scanner evidence: {[str(p) for p in expected if not p.is_file()]}"
           text = report.read_text(encoding="utf-8", errors="replace")
           assert "127.0.0.1" in text, "Target missing from generated report"
           print("CLI report:", report)
-          print("Retained files:", [p.name for p in raw])
+          print("Retained files:", [p.name for p in expected])
           PY
 
       - name: Test interactive CLI launcher
@@ -140,12 +141,7 @@ jobs:
           log_path = Path("webapp.log")
           log_handle = log_path.open("w", encoding="utf-8")
           env = os.environ.copy()
-          process = subprocess.Popen(
-              [sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port), "--no-browser"],
-              stdout=log_handle,
-              stderr=subprocess.STDOUT,
-              env=env,
-          )
+          process = subprocess.Popen([sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port), "--no-browser"], stdout=log_handle, stderr=subprocess.STDOUT, env=env)
 
           def request(method, path, payload=None, cookie=None, host_header=None):
               headers = {}
@@ -162,15 +158,13 @@ jobs:
                   conn.request(method, path, body=body, headers=headers)
                   resp = conn.getresponse()
                   raw = resp.read()
-                  text = raw.decode("utf-8", errors="replace")
-                  return resp.status, dict(resp.getheaders()), text
+                  return resp.status, dict(resp.getheaders()), raw.decode("utf-8", errors="replace")
               finally:
                   conn.close()
 
           def json_request(method, path, payload=None, cookie=None):
               status, headers, text = request(method, path, payload, cookie)
-              data = json.loads(text) if text else {}
-              return status, headers, data
+              return status, headers, json.loads(text) if text else {}
 
           def wait_scan(scan_id, cookie, timeout=20):
               deadline = time.time() + timeout
@@ -198,14 +192,11 @@ jobs:
                   time.sleep(0.25)
 
               assert "MTScan" in index, "dashboard HTML did not load"
-
               status, _, session = json_request("GET", "/api/session")
               assert status == 200 and session.get("authenticated") is False, session
-
               status, _, denied = json_request("GET", "/api/health")
               assert status == 401 and denied.get("authenticated") is False, denied
 
-              # The first-run credential is generated at runtime and printed only locally.
               deadline = time.time() + 5
               password = None
               while time.time() < deadline:
@@ -218,70 +209,35 @@ jobs:
                   time.sleep(0.1)
               assert password, "one-time password was not emitted on first startup"
 
-              status, headers, login = json_request(
-                  "POST", "/api/login", {"username": "admin", "password": password}
-              )
+              status, headers, login = json_request("POST", "/api/login", {"username": "admin", "password": password})
               assert status == 200 and login.get("authenticated") is True, login
               cookie = headers.get("Set-Cookie", "").split(";", 1)[0]
               assert cookie.startswith("mtscan_session="), headers
               assert login.get("must_change_password") is True, login
-
               status, _, blocked = json_request("GET", "/api/health", cookie=cookie)
               assert status == 403 and blocked.get("must_change_password") is True, blocked
 
               new_password = "MTScan-Integration-Password-2026"
-              status, _, changed = json_request(
-                  "POST",
-                  "/api/change-password",
-                  {
-                      "current_password": password,
-                      "new_password": new_password,
-                      "confirm_password": new_password,
-                  },
-                  cookie=cookie,
-              )
+              status, _, changed = json_request("POST", "/api/change-password", {"current_password": password, "new_password": new_password, "confirm_password": new_password}, cookie=cookie)
               assert status == 200 and changed.get("must_change_password") is False, changed
-
               status, _, health = json_request("GET", "/api/health", cookie=cookie)
               assert status == 200, health
-
               forbidden_status, _, _ = request("GET", "/", host_header="evil.example")
               assert forbidden_status == 403, forbidden_status
 
-              status, _, dry = json_request(
-                  "POST",
-                  "/api/scans",
-                  {
-                      "target": "https://example.com",
-                      "mode": "chain",
-                      "dry_run": True,
-                      "json_output": False,
-                  },
-                  cookie=cookie,
-              )
+              status, _, dry = json_request("POST", "/api/scans", {"target": "https://example.com", "mode": "chain", "dry_run": True, "json_output": False}, cookie=cookie)
               assert status == 201, dry
               dry_done = wait_scan(dry["id"], cookie)
               assert dry_done.get("status") == "completed", dry_done
               assert all(item.get("success") for item in dry_done.get("results", [])), dry_done
 
-              status, _, real = json_request(
-                  "POST",
-                  "/api/scans",
-                  {
-                      "target": "127.0.0.1",
-                      "mode": "chain",
-                      "dry_run": False,
-                      "json_output": False,
-                  },
-                  cookie=cookie,
-              )
+              status, _, real = json_request("POST", "/api/scans", {"target": "127.0.0.1", "mode": "chain", "dry_run": False, "json_output": False}, cookie=cookie)
               assert status == 201, real
               real_done = wait_scan(real["id"], cookie)
               assert real_done.get("status") == "completed", real_done
               results = real_done.get("results", [])
               assert len(results) == 3 and all(item.get("success") for item in results), real_done
               assert real_done.get("report_file"), real_done
-
               summary = {
                   "static_dashboard": "PASS",
                   "unauthenticated_session": "PASS",
