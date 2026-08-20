@@ -124,7 +124,7 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install pip-audit
+      - name: Install pip-audit and Bandit
         run: python -m pip install --upgrade pip-audit "bandit[toml]"
 
       - name: Audit Python dependencies

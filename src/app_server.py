@@ -52,7 +52,7 @@ SCHEDULER_TICK_SECONDS = 10.0
 SESSION_SECONDS = 12 * 60 * 60
 AUTH_ITERATIONS = 200_000
 DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "admin"
+DEFAULT_PASSWORD = secrets.token_urlsafe(18)
 MIN_PASSWORD_LENGTH = 8
 SESSION_COOKIE_NAME = "mtscan_session"
 SCAN_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
@@ -349,6 +349,9 @@ def load_auth_record() -> Dict[str, object]:
         if isinstance(record, dict) and record.get("username") and record.get("password"):
             return record
         record = default_auth_record()
+        print(f"[AUTH] Initial username: {DEFAULT_USERNAME}", flush=True)
+        print(f"[AUTH] Initial one-time password: {DEFAULT_PASSWORD}", flush=True)
+        print("[AUTH] Change this password after the first login.", flush=True)
         try:
             STORE.save_auth(record)  # type: ignore[attr-defined]
         except Exception:
