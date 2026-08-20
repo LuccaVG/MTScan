@@ -1,95 +1,106 @@
 # Security Policy
 
-## English
+MTScan is a security testing tool and must be used only on systems you own or are explicitly authorized to assess.
 
-MTScan is a security testing tool. It must be used only on systems you own or
-are explicitly authorized to assess.
+## Supported versions
 
-## Supported Scope
+| Version | Supported |
+|---|---|
+| `1.0.0-alpha` / current `develop` alpha line | Yes |
+| Older development snapshots | No guaranteed security support |
 
-Security issues in this repository include:
+During the alpha period, security fixes are applied to the current development line. Backports are not guaranteed.
 
-- API leaks from the local web app
-- Unsafe file path handling
-- Incorrect command redaction
-- Unsafe handling of scan output
-- Installation behavior that exposes secrets or writes outside expected paths
-- Documentation that could lead users to unsafe operation
+## Security contact and responsible disclosure
 
-Scanner findings discovered by `naabu`, `httpx`, or `nuclei` against a third
-party target are not vulnerabilities in MTScan itself.
+Preferred reporting method: **GitHub private vulnerability reporting / Security Advisories** for this repository.
 
-## Reporting a Vulnerability
+Maintainer: **@LuccaVG**.
 
-If you find a security issue in MTScan:
+If private vulnerability reporting is unavailable, open a minimal public issue asking for a private contact channel **without including exploit details, secrets, or reproduction data**.
 
-1. Do not publish exploit details before the maintainer has had time to review.
-2. Include a clear description, affected files or endpoints, reproduction steps,
-   and impact.
-3. Include whether secrets, paths, scan output, or system data could leak.
-4. Avoid sending real credentials, private scan data, or third-party target data.
+Do not publish a proof of concept or exploitation details before coordinated disclosure.
 
-If this project is hosted on GitHub, use the repository security advisory flow
-when available. Otherwise, contact the maintainer privately before opening a
-public issue with sensitive details.
+## Expected response process
 
-## Local App Hardening
+These are target response times, not service-level guarantees:
 
-The local web app is designed to reduce accidental exposure:
+| Stage | Target |
+|---|---:|
+| Acknowledge report | 7 days |
+| Initial triage | 14 days |
+| Severity and scope decision | 21 days |
+| Remediation plan or status update | 30 days |
 
-- Loopback bind by default
-- `--allow-remote` required for non-loopback bind
-- Host header allowlist
-- Security headers on JSON and static responses
-- Request size limit
-- Static path traversal protection
-- API redaction for local paths and sensitive command values
+Complex dependency or architectural issues may require more time. The reporter should receive a status update when the initial target cannot be met.
 
-Remote binding should be used only inside a trusted lab network or behind a
-properly authenticated reverse proxy.
+## In scope
 
-## Responsible Use
+Examples include:
 
-MTScan can run active network scanners. Unauthorized scanning can be illegal,
-harmful, or disruptive. Always obtain permission, define scan scope, and respect
-rate limits.
+- Authentication or authorization bypass in the local web app.
+- Session or password handling weaknesses.
+- Host-header, path traversal, file write, or static-file escape issues.
+- Command injection or unsafe subprocess construction.
+- Target-validation bypasses that cause unintended scanner behavior.
+- Leakage of credentials, tokens, headers, proxy values, local paths, or private scan data.
+- Unsafe report or API serialization.
+- Installer behavior that exposes secrets or performs unexpected privileged writes.
+- Dependency vulnerabilities that are reachable in MTScan's supported execution paths.
+- Unsafe handling of untrusted Nuclei templates.
 
-## Português do Brasil
+## Out of scope
 
-MTScan é uma ferramenta de testes de segurança. Ela deve ser usada somente em
-sistemas que você possui ou tem autorização explícita para avaliar.
+The following are generally not MTScan vulnerabilities:
 
-## Escopo Suportado
+- Vulnerabilities found by Naabu, HTTPX, or Nuclei in a third-party target.
+- False positives or false negatives caused solely by upstream scanner templates, unless MTScan corrupts or misrepresents the result.
+- Issues requiring an attacker to already control the operating system account running MTScan with equivalent privileges.
+- Denial of service caused by intentionally scanning an unauthorized or fragile third-party target.
+- Upstream vulnerabilities that do not affect a version or code path used by MTScan.
 
-Problemas de segurança neste repositório incluem:
+## Safe testing expectations
 
-- Vazamentos na API da aplicação web local
-- Tratamento inseguro de caminhos de arquivo
-- Redação incorreta de comandos
-- Tratamento inseguro da saída dos scanners
-- Instalação que exponha segredos ou escreva fora dos caminhos esperados
-- Documentação que possa induzir uso inseguro
+- Prefer loopback, disposable VMs, containers, and isolated lab networks.
+- Do not test security reports against public third-party systems without authorization.
+- Use non-production credentials and synthetic data.
+- Keep scan rates low when availability is part of the test.
+- Avoid destructive Nuclei templates or templates that execute code unless the lab is explicitly designed for that purpose.
+- Do not attach raw private scan results to public issues.
 
-Achados que `naabu`, `httpx` ou `nuclei` encontram em um alvo de terceiro não
-são vulnerabilidades do próprio MTScan.
+## Sensitive-data handling
 
-## Como Reportar
+MTScan attempts to redact sensitive command values and local paths from public command previews and API payloads. This does **not** mean every scanner response is safe to publish.
 
-Se você encontrar uma falha de segurança no MTScan:
+Scanner output and reports may contain:
 
-1. Não publique detalhes de exploração antes da revisão do mantenedor.
-2. Inclua descrição clara, arquivos ou endpoints afetados, passos de reprodução
-   e impacto.
-3. Informe se segredos, caminhos, saída de scan ou dados do sistema podem vazar.
-4. Evite enviar credenciais reais, dados privados de varredura ou dados de
-   alvos de terceiros.
+- IP addresses and hostnames.
+- URLs and internal paths.
+- Service banners and software versions.
+- CVE/CWE identifiers.
+- Extracted response data.
+- User-supplied headers or variables in upstream tool artifacts.
 
-Se o projeto estiver no GitHub, use o fluxo de security advisory quando
-disponível. Caso contrário, fale com o mantenedor de forma privada antes de
-abrir uma issue pública com detalhes sensíveis.
+Treat result directories, history stores, Cassandra data, local authentication files, Nuclei stored responses, Markdown/SARIF exports, and screenshots as potentially sensitive.
 
-## Uso Responsável
+## Dependency vulnerability policy
 
-O MTScan pode executar scanners ativos de rede. Varredura sem autorização pode
-ser ilegal, prejudicial ou disruptiva. Sempre obtenha permissão, defina o escopo
-e respeite limites de taxa.
+MTScan tracks Python dependency risk with `pip-audit`, Python code issues with Bandit, and source-level findings with CodeQL/Semgrep in GitHub Actions. Security-relevant dependency findings should be triaged for reachability and upgraded or mitigated when practical.
+
+ProjectDiscovery binaries and Nuclei templates are external trusted dependencies. Keep them updated and verify their upstream source.
+
+## Web application boundary
+
+The web interface binds to loopback by default and refuses non-loopback binding unless `--allow-remote` is explicitly supplied. Remote binding changes the threat model and should be used only on a trusted lab network or behind an independently secured reverse proxy.
+
+The local app uses an authenticated session cookie, a randomly generated first-run password, mandatory password change, Host-header restrictions, request-size limits, path traversal protection, CSP, `X-Frame-Options`, `nosniff`, and no-store caching.
+
+## Nuclei template risk
+
+A Nuclei template is not merely documentation. Templates can cause network requests and may use capabilities such as workflows, JavaScript, code execution, file access, or external interactions depending on Nuclei configuration and template type.
+
+Only run templates from sources you trust and review custom templates before use. See [docs/concepts/security-model.md](docs/concepts/security-model.md).
+
+## Authorization warning
+
+Unauthorized scanning may be illegal, disruptive, or contractually prohibited. Define the target, ports, time window, rate, scanner profile, and allowed techniques before running MTScan.

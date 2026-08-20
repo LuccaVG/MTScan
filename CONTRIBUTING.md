@@ -1,41 +1,26 @@
-# Contributing
+# Contributing to MTScan
 
-## English
+Contributions are welcome when they improve defensive security testing, reliability, documentation, reporting, or the safety of the local application.
 
-MTScan is currently owned and maintained by Lucca Vieira Gentilezza, the sole
-copyright holder for the original MTScan project files in this repository.
+## Before contributing
 
-Contributions are welcome when they improve defensive security testing,
-documentation, reliability, reporting, or local app safety.
+Use MTScan only for authorized security testing. Do not place real credentials, tokens, customer data, private scan output, or third-party target data in issues, pull requests, tests, screenshots, or fixtures.
 
-## Contribution Rules
+Security vulnerabilities in MTScan itself must follow [SECURITY.md](SECURITY.md), not the public issue workflow.
 
-- Use MTScan only for authorized testing.
-- Do not include private scan data, credentials, tokens, customer data, or
-  third-party target data in issues, pull requests, tests, or screenshots.
-- Keep changes focused and explain the security impact when relevant.
-- Add or update tests when changing scanner command construction, reports,
-  storage, API responses, or path handling.
-- Keep English documentation first and Portuguese (Brazil) second.
-- Do not add third-party code, templates, binaries, logos, or assets unless their
-  license allows redistribution and the notice is documented.
+## Development branch
 
-## Licensing of Contributions
+Normal development changes should target `develop`. Release preparation is promoted from `develop` according to [docs/development/release-process.md](docs/development/release-process.md).
 
-Unless a separate written agreement says otherwise, contributions submitted to
-this repository are offered under the same project multi-license grant:
+## Development setup
 
-```text
-Apache-2.0 OR MIT OR BSD-3-Clause
+Install Python dependencies:
+
+```bash
+python3 -m pip install -r config/requirements.txt
 ```
 
-Third-party tools and dependencies are not relicensed by this project. Lucca
-Vieira Gentilezza does not claim licensing ownership over `naabu`, `httpx`,
-`nuclei`, their templates, binaries, dependencies, names, logos, or trademarks.
-
-## Development Checks
-
-Compile Python files:
+Check syntax:
 
 ```bash
 python3 -m py_compile mtscan.py install/setup.py src/workflow.py src/tool_runner.py src/app_server.py src/scan_storage.py
@@ -44,46 +29,61 @@ python3 -m py_compile mtscan.py install/setup.py src/workflow.py src/tool_runner
 Run tests:
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -v
 ```
 
-Dry-run the complete chain:
+Preview the chain without network traffic:
 
 ```bash
-python3 src/workflow.py --dry-run --all -host example.com --save-output --json-output --skip-network-check
+python3 src/workflow.py --all -host https://example.com --dry-run --json-output
 ```
 
-## Português do Brasil
+## Code standards
 
-O MTScan atualmente pertence e é mantido por Lucca Vieira Gentilezza, o único
-titular de copyright dos arquivos originais do projeto MTScan neste repositório.
+Python changes should follow the rules in [coding-standards.md](docs/development/coding-standards.md). In particular:
 
-Contribuições são bem-vindas quando melhoram testes defensivos de segurança,
-documentação, confiabilidade, relatórios ou segurança da aplicação local.
+- Use PEP 257-style docstrings for public modules, classes, and functions.
+- Add type hints to new or materially changed Python interfaces.
+- Pass subprocess arguments as lists; do not introduce `shell=True` for scanner execution.
+- Validate user-controlled targets and options before constructing scanner commands.
+- Redact credentials, tokens, headers, proxy secrets, and local paths from public command previews.
+- Add tests for security-sensitive parsing, redaction, path handling, command construction, and target propagation.
 
-## Regras de Contribuição
+## Documentation standards
 
-- Use o MTScan somente para testes autorizados.
-- Não inclua dados privados de varredura, credenciais, tokens, dados de clientes
-  ou dados de alvos de terceiros em issues, pull requests, testes ou capturas de
-  tela.
-- Mantenha mudanças focadas e explique o impacto de segurança quando relevante.
-- Adicione ou atualize testes ao mudar construção de comandos, relatórios,
-  armazenamento, respostas da API ou tratamento de caminhos.
-- Mantenha documentação em inglês primeiro e português do Brasil em segundo.
-- Não adicione código, templates, binários, logos ou assets de terceiros sem
-  permissão de redistribuição e aviso documentado.
+MTScan documentation uses Diátaxis:
 
-## Licenciamento de Contribuições
+- **Tutorials / getting started** teach by guided execution.
+- **How-to guides** solve a specific task.
+- **Reference** documents facts, flags, files, configuration, formats, and APIs.
+- **Explanation / concepts** documents architecture, trade-offs, security boundaries, and limitations.
 
-A menos que exista um acordo escrito separado, contribuições enviadas a este
-repositório são oferecidas sob a mesma concessão multi-licença do projeto:
+Documentation changes should use consistent headings, tested commands, explicit defaults, and links to related reference pages. Architecture decisions that constrain future behavior should be recorded under `docs/adr/`.
+
+## Testing requirements
+
+Choose the appropriate test category and document the environment for non-trivial scanner changes. The test taxonomy is defined in [docs/development/testing.md](docs/development/testing.md).
+
+Do not describe a loopback fixture or scanner stub test as compatibility certification for a real vulnerable VM, product, CVE, or external environment.
+
+## Pull requests
+
+A pull request should explain:
+
+1. What changed.
+2. Why it changed.
+3. Security or compatibility impact.
+4. Tests performed and their environment.
+5. Documentation and changelog impact.
+
+Update `CHANGELOG.md` for user-visible changes. Breaking changes require a major version decision; features require a minor version decision; backward-compatible fixes require a patch decision once MTScan reaches stable SemVer releases.
+
+## Licensing of contributions
+
+Unless a separate written agreement says otherwise, contributions submitted to this repository are offered under the same project multi-license grant:
 
 ```text
 Apache-2.0 OR MIT OR BSD-3-Clause
 ```
 
-Ferramentas e dependências de terceiros não são relicenciadas por este projeto.
-Lucca Vieira Gentilezza não reivindica propriedade de licença sobre `naabu`,
-`httpx`, `nuclei`, seus templates, binários, dependências, nomes, logos ou
-marcas.
+Third-party tools, templates, binaries, dependencies, names, logos, and trademarks are not relicensed by MTScan. Do not add redistributed third-party material unless its license permits redistribution and the required notices are included.
