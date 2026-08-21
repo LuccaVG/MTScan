@@ -3,10 +3,15 @@ import unittest
 from pathlib import Path
 
 from src.tool_runner import (
+    ScanInputError,
     ToolResult,
+    build_httpx_command,
     build_naabu_command,
+    build_nuclei_command,
     cleanup_intermediate_outputs,
+    redact_command,
     run_chain,
+    validate_scan_request,
     write_summary,
 )
 
@@ -40,6 +45,153 @@ class UrlTargetRegressionTests(unittest.TestCase):
         self.assertEqual(naabu[naabu.index("-host") + 1], "example.com")
         self.assertEqual(httpx[httpx.index("-u") + 1], target)
         self.assertEqual(nuclei[nuclei.index("-u") + 1], target)
+
+
+class TargetValidationRegressionTests(unittest.TestCase):
+    def test_rejects_credential_bearing_url(self):
+        with self.assertRaises(ScanInputError):
+            validate_scan_request("https://admin:secret@example.com/")
+
+    def test_rejects_invalid_url_port(self):
+        with self.assertRaises(ScanInputError):
+            validate_scan_request("https://example.com:99999/")
+
+    def test_rejects_invalid_host_port(self):
+        with self.assertRaises(ScanInputError):
+            validate_scan_request("example.com:99999")
+
+    def test_rejects_invalid_cidr_address(self):
+        with self.assertRaises(ScanInputError):
+            validate_scan_request("999.999.999.999/24")
+
+    def test_rejects_malformed_hostname(self):
+        with self.assertRaises(ScanInputError):
+            validate_scan_request("example..com")
+
+    def test_accepts_supported_targets(self):
+        targets = (
+            "example.com",
+            "example.com:443",
+            "192.0.2.10",
+            "192.0.2.0/24",
+            "2001:db8::10",
+            "[2001:db8::10]:443",
+            "https://example.com:8443/path?q=1",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertEqual(validate_scan_request(target), target)
+
+    def test_command_preview_redacts_url_userinfo_defensively(self):
+        preview = " ".join(
+            redact_command(["httpx", "-u", "https://admin:secret@example.com/"])
+        )
+        self.assertNotIn("admin:secret", preview)
+        self.assertIn("[redacted]@example.com", preview)
+
+
+class ProjectDiscoveryCompatibilityRegressionTests(unittest.TestCase):
+    def test_httpx_method_uses_request_method_flag(self):
+        command = build_httpx_command(
+            target="https://example.com",
+            method="POST",
+            tool_path="httpx",
+        )
+        self.assertIn("-x", command)
+        self.assertEqual(command[command.index("-x") + 1], "POST")
+        self.assertNotIn("-method", command)
+
+    def test_nuclei_exclude_tags_uses_etags(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            exclude_tags="dos,fuzz",
+            tool_path="nuclei",
+        )
+        self.assertIn("-etags", command)
+        self.assertEqual(command[command.index("-etags") + 1], "dos,fuzz")
+        self.assertNotIn("-et", command)
+
+    def test_nuclei_max_redirects_uses_mr(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            max_redirects=5,
+            tool_path="nuclei",
+        )
+        self.assertIn("-mr", command)
+        self.assertEqual(command[command.index("-mr") + 1], "5")
+        self.assertNotIn("-maxr", command)
+
+    def test_nuclei_user_agent_is_sent_as_header(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            user_agent="MTScan/1.0.1",
+            tool_path="nuclei",
+        )
+        self.assertIn("-H", command)
+        self.assertEqual(command[command.index("-H") + 1], "User-Agent: MTScan/1.0.1")
+        self.assertNotIn("-user-agent", command)
+
+    def test_nuclei_csv_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not support CSV output"):
+            build_nuclei_command(
+                target="https://example.com",
+                csv_output=True,
+                tool_path="nuclei",
+            )
+
+    def test_nuclei_csv_scan_option_is_rejected(self):
+        with self.assertRaisesRegex(ScanInputError, "does not support CSV output"):
+            validate_scan_request(
+                "https://example.com",
+                {"nuclei_csv": True},
+            )
+
+
+class NucleiProfileRegressionTests(unittest.TestCase):
+    def test_default_profile_signature_does_not_apply_positive_tag_filter(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            tags="exposure,misconfig",
+            severity="critical,high,medium",
+            rate_limit=75,
+            concurrency=10,
+            tool_path="nuclei",
+        )
+        self.assertNotIn("-tags", command)
+
+    def test_fast_profile_signature_does_not_apply_positive_tag_filter(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            tags="exposure,misconfig,panel",
+            severity="critical,high",
+            rate_limit=100,
+            concurrency=8,
+            tool_path="nuclei",
+        )
+        self.assertNotIn("-tags", command)
+
+    def test_stealth_profile_signature_does_not_apply_positive_tag_filter(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            tags="exposure,misconfig",
+            severity="critical,high,medium",
+            rate_limit=5,
+            concurrency=5,
+            tool_path="nuclei",
+        )
+        self.assertNotIn("-tags", command)
+
+    def test_explicit_custom_tags_are_preserved(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            tags="cve,rce",
+            severity="critical,high",
+            rate_limit=75,
+            concurrency=10,
+            tool_path="nuclei",
+        )
+        self.assertIn("-tags", command)
+        self.assertEqual(command[command.index("-tags") + 1], "cve,rce")
 
 
 class RawEvidenceRegressionTests(unittest.TestCase):
