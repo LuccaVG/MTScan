@@ -29,12 +29,13 @@ jobs:
           go install github.com/projectdiscovery/httpx/cmd/httpx@latest
           go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Prepare Nuclei templates and vulnerable image while network is available
+      - name: Prepare Nuclei templates and vulnerable images while network is available
         shell: bash
         run: |
           set -euo pipefail
           "$(go env GOPATH)/bin/nuclei" -ut
           docker pull httpd:2.4.49
+          docker pull httpd:2.4.58
       - name: Build and start fresh isolated CVE-2021-41773 target
         shell: bash
         run: |
@@ -47,18 +48,12 @@ jobs:
           EOF
           docker build --network=none -f "$RUNNER_TEMP/Dockerfile.cve" -t mtscan-cve-2021-41773:qa "$RUNNER_TEMP"
           docker network create --internal --driver bridge mtscan-qa-internal
-          docker run -d --name mtscan-vuln \
-            --network mtscan-qa-internal \
-            --read-only \
-            --tmpfs /usr/local/apache2/logs:rw,nosuid,nodev,noexec,size=8m \
-            --cap-drop ALL \
-            mtscan-cve-2021-41773:qa
+          docker run -d --name mtscan-vuln --network mtscan-qa-internal --read-only --tmpfs /usr/local/apache2/logs:rw,nosuid,nodev,noexec,size=8m --cap-drop ALL mtscan-cve-2021-41773:qa
           TARGET_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mtscan-vuln)"
           echo "TARGET_IP=$TARGET_IP" >> "$GITHUB_ENV"
           echo "TARGET_URL=http://$TARGET_IP:8080" >> "$GITHUB_ENV"
           sleep 2
           curl --fail --silent --show-error --max-time 5 "http://$TARGET_IP:8080/" >/dev/null
-          test -z "$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' mtscan-vuln)" || true
           docker inspect mtscan-vuln > target-inspect.json
       - name: Verify vulnerability genuinely exists before MTScan
         shell: bash
@@ -74,7 +69,6 @@ jobs:
           TPL=$(find "$HOME/nuclei-templates" -type f -iname 'CVE-2021-41773.yaml' | head -n1)
           test -n "$TPL"
           echo "CVE_TEMPLATE=$TPL" >> "$GITHUB_ENV"
-          echo "$TPL"
       - name: Baseline real Nuclei detection
         shell: bash
         run: |
@@ -85,11 +79,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf qa-cli-results
           python src/workflow.py --nuclei -host "$TARGET_URL" -t "$CVE_TEMPLATE" --nuclei-json --no-interactsh --save-output --output-dir qa-cli-results > qa-cli.log 2>&1
           test -f qa-cli-results/vulnerability_report.md
+          test -f qa-cli-results/nuclei_results.jsonl
           grep -qi 'CVE-2021-41773' qa-cli-results/vulnerability_report.md
-          grep -qi 'CVE-2021-41773' qa-cli-results/nuclei_results.txt
+          grep -qi 'CVE-2021-41773' qa-cli-results/nuclei_results.jsonl
       - name: Run MTScan HTTPX and Naabu integration against the same isolated target
         shell: bash
         run: |
@@ -108,14 +102,12 @@ jobs:
           python - <<'PY'
           import http.client, json, os, re, subprocess, sys, time
           from pathlib import Path
-          host, port = '127.0.0.1', 18765
-          log = Path('qa-webapp.log')
-          h = log.open('w', encoding='utf-8')
-          p = subprocess.Popen([sys.executable,'-u','src/app_server.py','--host',host,'--port',str(port),'--no-browser'], stdout=h, stderr=subprocess.STDOUT, env=os.environ.copy())
+          host,port='127.0.0.1',18765
+          log=Path('qa-webapp.log'); h=log.open('w',encoding='utf-8')
+          p=subprocess.Popen([sys.executable,'-u','src/app_server.py','--host',host,'--port',str(port),'--no-browser'],stdout=h,stderr=subprocess.STDOUT,env=os.environ.copy())
           def req(method,path,payload=None,cookie=None):
               headers={}; body=None
-              if payload is not None:
-                  body=json.dumps(payload); headers['Content-Type']='application/json'
+              if payload is not None: body=json.dumps(payload); headers['Content-Type']='application/json'
               if cookie: headers['Cookie']=cookie
               c=http.client.HTTPConnection(host,port,timeout=10)
               try:
@@ -131,11 +123,9 @@ jobs:
                   except OSError: pass
                   time.sleep(.25)
               else: raise AssertionError('webapp startup timeout')
-              h.flush(); txt=log.read_text(encoding='utf-8',errors='replace')
-              pw=re.search(r'Initial one-time password: (\S+)',txt).group(1)
-              s,headers,data=req('POST','/api/login',{'username':'admin','password':pw}); assert s==200
-              cookie=headers['Set-Cookie'].split(';',1)[0]
-              new='MTScan-QA-Real-CVE-2026!'
+              h.flush(); txt=log.read_text(encoding='utf-8',errors='replace'); m=re.search(r'Initial one-time password: (\S+)',txt); assert m
+              pw=m.group(1); s,headers,data=req('POST','/api/login',{'username':'admin','password':pw}); assert s==200
+              cookie=headers['Set-Cookie'].split(';',1)[0]; new='MTScan-QA-Real-CVE-2026!'
               s,_,_=req('POST','/api/change-password',{'current_password':pw,'new_password':new,'confirm_password':new},cookie); assert s==200
               payload={'target':os.environ['TARGET_URL'],'mode':'nuclei','profile':'default','dry_run':False,'json_output':True,'options':{'templates':os.environ['CVE_TEMPLATE'],'no_interactsh':True}}
               s,_,scan=req('POST','/api/scans',payload,cookie); assert s==201,scan
@@ -145,11 +135,11 @@ jobs:
                   if scan.get('status') not in {'queued','running'}: break
                   time.sleep(.25)
               assert scan.get('status')=='completed',scan
-              text=json.dumps(scan).lower(); assert 'cve-2021-41773' in text,scan
+              assert 'cve-2021-41773' in json.dumps(scan).lower(),scan
               Path('qa-webapp-result.json').write_text(json.dumps(scan,indent=2),encoding='utf-8')
           finally:
               if p.poll() is None:
-                  p.terminate();
+                  p.terminate()
                   try: p.wait(timeout=5)
                   except subprocess.TimeoutExpired: p.kill(); p.wait(timeout=5)
               h.close()
@@ -158,7 +148,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull httpd:2.4.58
           docker run -d --name mtscan-control --network mtscan-qa-internal httpd:2.4.58
           CONTROL_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mtscan-control)"
           sleep 2
@@ -166,23 +155,10 @@ jobs:
           test ! -s control-nuclei.jsonl
       - name: Summarize QA evidence
         if: always()
-        shell: bash
         run: |
-          {
-            echo '# MTScan isolated real-CVE QA'
-            echo
-            echo '- Vulnerable target: Apache HTTP Server 2.4.49 / CVE-2021-41773'
-            echo '- Network: fresh Docker internal bridge, no published ports'
-            echo '- Target filesystem: read-only; capabilities dropped'
-            echo '- Baseline vulnerability proof: path traversal exposed /etc/passwd inside disposable container'
-            echo '- Baseline Nuclei detection: recorded in baseline-nuclei.jsonl'
-            echo '- MTScan CLI evidence: qa-cli-results/'
-            echo '- MTScan webapp evidence: qa-webapp-result.json'
-            echo '- Patched control: Apache 2.4.58, expected no CVE-2021-41773 finding'
-          } > qa-summary.md
+          printf '%s\n' '# MTScan isolated real-CVE QA' '- Apache 2.4.49 / CVE-2021-41773' '- Fresh Docker internal bridge; no published ports' '- Vulnerable container read-only with all Linux capabilities dropped' '- Real ProjectDiscovery tools and current templates' > qa-summary.md
       - name: Destroy isolated lab
         if: always()
-        shell: bash
         run: |
           docker rm -f mtscan-vuln mtscan-control 2>/dev/null || true
           docker network rm mtscan-qa-internal 2>/dev/null || true
