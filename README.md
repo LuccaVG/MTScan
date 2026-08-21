@@ -1,13 +1,13 @@
 # MTScan
 
-![Version](https://img.shields.io/badge/version-1.0.0--alpha-orange)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT%20OR%20BSD--3--Clause-green)
 
 MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates ProjectDiscovery `naabu`, `httpx`, and `nuclei` through a shared CLI and authenticated local web interface.
 
-**Current version:** 1.0.0 Alpha (`1.0.0-alpha`). The alpha API, storage schema, and CLI compatibility surface may still change before the stable `1.0.0` release.
+**Current version:** 1.0.1.
 
 > Use MTScan only on systems you own or are explicitly authorized to test.
 
@@ -19,6 +19,7 @@ MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates Proje
 - Authenticated local web dashboard with scan history, schedules, findings, assets, and health status.
 - Cassandra-backed history with a local JSONL fallback.
 - Target and option validation, command redaction, local-first web binding, and defensive HTTP headers.
+- Compatibility handling for current ProjectDiscovery HTTPX and Nuclei CLI flags.
 
 ## Requirements
 
@@ -103,7 +104,7 @@ Nuclei         templates / CVE and exposure detection
 MTScan report  vulnerability_report.md
 ```
 
-The CLI and web app share `src/tool_runner.py`, which owns validation, command construction, scanner execution, result parsing, chained target propagation, redaction, and report generation.
+The CLI and web app share `src/tool_runner.py`, which owns validation, command construction, scanner execution, result parsing, chained target propagation, redaction, and report generation. Runtime compatibility guards keep MTScan aligned with supported ProjectDiscovery CLI behavior while preserving the existing public MTScan interface.
 
 ## Documentation
 
