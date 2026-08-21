@@ -53,8 +53,8 @@ Compatibility-only accepted flags: `--source-port`, `--interface`, `--host-disco
 | `--response-time` | boolean | Show response time | off |
 | `--httpx-timeout` | integer | HTTPX timeout | upstream/default |
 | `--httpx-threads` | integer | HTTPX threads | upstream/default |
-| `--method` | string | HTTP method | upstream/default |
-| `--user-agent` | string | Custom User-Agent | none |
+| `--method` | string | HTTP request method; mapped to current HTTPX `-x` | upstream/default |
+| `--user-agent` | string | Custom HTTPX User-Agent | none |
 | `--filter-code` | string | Filter status codes | none |
 | `--filter-length` | string | Filter response lengths | none |
 | `--match-code` | string | Match status codes | none |
@@ -72,7 +72,7 @@ Compatibility-only accepted flags: `--source-port`, `--interface`, `--host-disco
 | `--template-path` | string | Alternate template path input | none |
 | `--tags` | string | Include template tags | none |
 | `--severity` | comma-separated values | Severity filter | Nuclei default for CLI; web profiles set their own filters |
-| `--exclude-tags` | string | Exclude template tags | none |
+| `--exclude-tags` | string | Exclude template tags; mapped to current Nuclei `-etags` | none |
 | `--exclude-templates` | string | Exclude templates | none |
 | `--exclude-matchers` | string | Exclude matcher names | none |
 | `--concurrency` | integer | Nuclei template concurrency | upstream/default |
@@ -82,8 +82,8 @@ Compatibility-only accepted flags: `--source-port`, `--interface`, `--host-disco
 | `--nuclei-retries` | integer | Nuclei retries | upstream/default |
 | `--proxy` | string | HTTP proxy | none |
 | `--disable-redirects` | boolean | Disable Nuclei redirects | off |
-| `--max-redirects` | integer | Maximum redirects | upstream/default |
-| `--nuclei-user-agent` | string | Nuclei User-Agent | none |
+| `--max-redirects` | integer | Maximum redirects; mapped to current Nuclei `-mr` | upstream/default |
+| `--nuclei-user-agent` | string | Nuclei User-Agent, sent as an HTTP `User-Agent` header | none |
 | `--custom-headers` | string | Nuclei headers | none |
 | `--vars` | string | Nuclei variables | none |
 | `--store-resp` | boolean | Store Nuclei responses | off |
@@ -92,11 +92,24 @@ Compatibility-only accepted flags: `--source-port`, `--interface`, `--host-disco
 | `--no-interactsh` | boolean | Disable Interactsh | off in CLI; enabled by built-in web profiles |
 | `--interactsh-token` | string | Interactsh token | none |
 | `--nuclei-json` | boolean | Request Nuclei JSONL | off |
-| `--nuclei-csv` | boolean | Request Nuclei CSV | off |
 | `--markdown-export` | path | Nuclei Markdown export directory | none |
 | `--sarif-export` | path | Nuclei SARIF export file | none |
 
+`--nuclei-csv` may still be accepted by older parser surfaces, but MTScan 1.0.1 rejects it before execution because current ProjectDiscovery Nuclei does not support CSV output. Use `--nuclei-json` or `--json-output` for structured Nuclei results.
+
 Compatibility-only accepted flags: `--exclude-severity` and `--include-rr`.
+
+## ProjectDiscovery compatibility notes
+
+MTScan 1.0.1 aligns command construction with the current ProjectDiscovery CLI semantics used by the project:
+
+- HTTPX request methods use `-x`; upstream `-method` is an output/display probe and is not used for MTScan's `--method` selector.
+- Nuclei exclude-tag filtering uses `-etags`; upstream `-et` is reserved for excluded templates.
+- Nuclei maximum redirects use `-mr`.
+- Nuclei User-Agent overrides are emitted through `-H "User-Agent: ..."`.
+- Unsupported Nuclei CSV output fails validation rather than generating an invalid scanner command.
+
+These mappings are covered by regression tests because ProjectDiscovery CLI behavior can change independently of MTScan.
 
 ## Global execution and output options
 
