@@ -1,13 +1,13 @@
 # MTScan
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT%20OR%20BSD--3--Clause-green)
 
 MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates ProjectDiscovery `naabu`, `httpx`, and `nuclei` through a shared CLI and authenticated local web interface.
 
-**Current version:** 1.0.1.
+**Current version:** 1.0.2.
 
 > Use MTScan only on systems you own or are explicitly authorized to test.
 
@@ -20,6 +20,7 @@ MTScan is a Linux-focused vulnerability analysis toolkit that orchestrates Proje
 - Cassandra-backed history with a local JSONL fallback.
 - Target and option validation, command redaction, local-first web binding, and defensive HTTP headers.
 - Compatibility handling for current ProjectDiscovery HTTPX and Nuclei CLI flags.
+- Automated unit, runtime-integration, and security validation in GitHub Actions.
 
 ## Requirements
 
@@ -115,6 +116,8 @@ The full documentation is organized with the [Diátaxis framework](docs/README.m
 - [Reference](docs/reference/cli.md)
 - [Concepts and design](docs/concepts/architecture.md)
 - [Development](docs/development/architecture.md)
+- [CI](docs/development/ci.md)
+- [Runtime validation](docs/development/runtime-validation.md)
 - [Architecture Decision Records](docs/adr/0001-use-projectdiscovery-tools.md)
 
 ## Security and authorization
