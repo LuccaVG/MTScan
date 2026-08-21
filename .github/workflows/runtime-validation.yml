@@ -1,0 +1,343 @@
+name: Runtime Validation
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-validation:
+    name: CLI and webapp E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade -r config/requirements.txt
+
+      - name: Create isolated scanner stubs
+        shell: bash
+        run: |
+          set -euo pipefail
+          FAKE_BIN="$RUNNER_TEMP/mtscan-fake-bin"
+          mkdir -p "$FAKE_BIN"
+          cat > "$FAKE_BIN/scanner-stub" <<'PY'
+          #!/usr/bin/env python3
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          tool = os.path.basename(sys.argv[0])
+          args = sys.argv[1:]
+
+          if any(flag in args for flag in ("-version", "--version")):
+              print(f"{tool} version 0.0.0-runtime-validation")
+              raise SystemExit(0)
+          if any(flag in args for flag in ("-h", "--help")):
+              print(f"{tool} ProjectDiscovery runtime validation stub -status-code -tech-detect")
+              raise SystemExit(0)
+
+          if tool == "naabu":
+              text = "127.0.0.1:8765"
+          elif tool in {"httpx", "httpx-toolkit"}:
+              text = "http://127.0.0.1:8765 [200] [MTScan Runtime Validation]"
+          elif tool == "nuclei":
+              if "-jsonl" in args:
+                  text = json.dumps({
+                      "template-id": "mtscan-runtime-validation",
+                      "matched-at": "http://127.0.0.1:8765",
+                      "info": {"name": "Runtime validation observation", "severity": "info"},
+                  })
+              else:
+                  text = "[mtscan-runtime-validation] [http] [info] http://127.0.0.1:8765"
+          else:
+              print(f"unexpected stub name: {tool}", file=sys.stderr)
+              raise SystemExit(2)
+
+          print(text)
+          if "-o" in args:
+              index = args.index("-o")
+              if index + 1 < len(args):
+                  destination = Path(args[index + 1])
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_text(text + "\n", encoding="utf-8")
+          PY
+          chmod +x "$FAKE_BIN/scanner-stub"
+          for tool in naabu httpx httpx-toolkit nuclei; do
+            ln -s scanner-stub "$FAKE_BIN/$tool"
+          done
+          echo "$FAKE_BIN" >> "$GITHUB_PATH"
+          echo "MTSCAN_STORAGE_BACKEND=file" >> "$GITHUB_ENV"
+
+      - name: Run complete unit suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python src/workflow.py --help > cli-help.log
+          grep -q -- '--dry-run' cli-help.log
+          python src/workflow.py --all -host https://example.com --dry-run > cli-dry-run.log
+          grep -q 'Target: https://example.com' cli-dry-run.log
+
+          rm -rf runtime-cli-results
+          python src/workflow.py --all -host 127.0.0.1 --save-output --output-dir runtime-cli-results > cli-run.log 2>&1
+          test -f runtime-cli-results/vulnerability_report.md
+          test -f runtime-cli-results/naabu_results.txt
+          test -f runtime-cli-results/httpx_results.txt
+          test -f runtime-cli-results/nuclei_results.txt
+
+      - name: Validate webapp end-to-end
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf data results_127.0.0.1_*
+          python - <<'PY'
+          import http.client
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          host = "127.0.0.1"
+          port = 18765
+          log_path = Path("webapp-runtime.log")
+          log_handle = log_path.open("w", encoding="utf-8")
+          env = os.environ.copy()
+          process = subprocess.Popen(
+              [sys.executable, "-u", "src/app_server.py", "--host", host, "--port", str(port), "--no-browser"],
+              stdout=log_handle,
+              stderr=subprocess.STDOUT,
+              env=env,
+          )
+
+          def request(method, path, payload=None, cookie=None, host_header=None, raw_body=None, content_type="application/json"):
+              headers = {}
+              body = raw_body
+              if payload is not None:
+                  body = json.dumps(payload)
+              if body is not None:
+                  headers["Content-Type"] = content_type
+              if cookie:
+                  headers["Cookie"] = cookie
+              if host_header:
+                  headers["Host"] = host_header
+              conn = http.client.HTTPConnection(host, port, timeout=5)
+              try:
+                  conn.request(method, path, body=body, headers=headers)
+                  response = conn.getresponse()
+                  raw = response.read()
+                  return response.status, dict(response.getheaders()), raw.decode("utf-8", errors="replace")
+              finally:
+                  conn.close()
+
+          def json_request(method, path, payload=None, cookie=None, **kwargs):
+              status, headers, text = request(method, path, payload, cookie, **kwargs)
+              return status, headers, json.loads(text) if text else {}
+
+          def wait_scan(scan_id, cookie, timeout=20):
+              deadline = time.time() + timeout
+              while time.time() < deadline:
+                  status, _, data = json_request("GET", f"/api/scans/{scan_id}", cookie=cookie)
+                  assert status == 200, (status, data)
+                  if data.get("status") not in {"queued", "running"}:
+                      return data
+                  time.sleep(0.2)
+              raise AssertionError(f"scan {scan_id} did not finish")
+
+          try:
+              deadline = time.time() + 20
+              while True:
+                  if process.poll() is not None:
+                      raise AssertionError(f"webapp exited early: {process.returncode}")
+                  try:
+                      status, headers, index = request("GET", "/")
+                      if status == 200:
+                          break
+                  except OSError:
+                      pass
+                  if time.time() >= deadline:
+                      raise AssertionError("webapp did not become ready")
+                  time.sleep(0.2)
+
+              assert "MTScan" in index
+              assert headers.get("X-Content-Type-Options") == "nosniff"
+              assert headers.get("X-Frame-Options") == "DENY"
+              assert "default-src 'self'" in headers.get("Content-Security-Policy", "")
+              assert headers.get("Cache-Control") == "no-store"
+
+              status, _, session = json_request("GET", "/api/session")
+              assert status == 200 and session.get("authenticated") is False
+              status, _, denied = json_request("GET", "/api/health")
+              assert status == 401 and denied.get("authenticated") is False
+
+              deadline = time.time() + 5
+              password = None
+              while time.time() < deadline:
+                  log_handle.flush()
+                  text = log_path.read_text(encoding="utf-8", errors="replace")
+                  match = re.search(r"Initial one-time password: (\S+)", text)
+                  if match:
+                      password = match.group(1)
+                      break
+                  time.sleep(0.1)
+              assert password
+
+              status, _, bad_login = json_request("POST", "/api/login", {"username": "admin", "password": "wrong"})
+              assert status == 401
+
+              status, login_headers, login = json_request("POST", "/api/login", {"username": "admin", "password": password})
+              assert status == 200 and login.get("authenticated") is True
+              cookie = login_headers.get("Set-Cookie", "").split(";", 1)[0]
+              assert cookie.startswith("mtscan_session=")
+              assert "HttpOnly" in login_headers.get("Set-Cookie", "")
+              assert "SameSite=Strict" in login_headers.get("Set-Cookie", "")
+              assert login.get("must_change_password") is True
+
+              status, _, blocked = json_request("GET", "/api/health", cookie=cookie)
+              assert status == 403 and blocked.get("must_change_password") is True
+
+              new_password = "MTScan-Runtime-Validation-2026"
+              status, _, changed = json_request(
+                  "POST", "/api/change-password",
+                  {"current_password": password, "new_password": new_password, "confirm_password": new_password},
+                  cookie=cookie,
+              )
+              assert status == 200 and changed.get("must_change_password") is False
+
+              status, _, health = json_request("GET", "/api/health", cookie=cookie)
+              assert status == 200
+              assert health.get("platform") == "linux"
+              assert health.get("missing_tools") == []
+
+              forbidden, _, _ = request("GET", "/", host_header="evil.example")
+              assert forbidden == 403
+              traversal, _, _ = request("GET", "/../src/app_server.py")
+              assert traversal == 404
+              traversal2, _, _ = request("GET", "/%2e%2e/src/app_server.py")
+              assert traversal2 == 404
+              wrong_type, _, _ = request("POST", "/api/scans", cookie=cookie, raw_body="{}", content_type="text/plain")
+              assert wrong_type == 400
+
+              status, _, dry = json_request("POST", "/api/scans", {
+                  "target": "https://example.com", "mode": "chain", "dry_run": True, "json_output": False
+              }, cookie=cookie)
+              assert status == 201
+              dry_done = wait_scan(dry["id"], cookie)
+              assert dry_done.get("status") == "completed"
+              assert len(dry_done.get("results", [])) == 3
+              assert all(item.get("success") for item in dry_done.get("results", []))
+
+              status, _, real = json_request("POST", "/api/scans", {
+                  "target": "127.0.0.1", "mode": "chain", "dry_run": False, "json_output": False
+              }, cookie=cookie)
+              assert status == 201
+              real_done = wait_scan(real["id"], cookie)
+              assert real_done.get("status") == "completed", real_done
+              results = real_done.get("results", [])
+              assert [item.get("tool") for item in results] == ["naabu", "httpx", "nuclei"]
+              assert all(item.get("success") for item in results)
+              assert real_done.get("report_file") == "vulnerability_report.md"
+
+              status, _, overview = json_request("GET", "/api/overview", cookie=cookie)
+              assert status == 200
+              assert overview.get("metrics", {}).get("total_scans", 0) >= 1
+
+              status, _, schedule = json_request("POST", "/api/schedules", {
+                  "name": "runtime-validation",
+                  "target": "127.0.0.1",
+                  "mode": "httpx",
+                  "profile": "default",
+                  "interval_hours": 24,
+                  "enabled": True,
+                  "dry_run": True,
+              }, cookie=cookie)
+              assert status == 201 and schedule.get("id")
+              schedule_id = schedule["id"]
+
+              status, _, schedule_list = json_request("GET", "/api/schedules", cookie=cookie)
+              assert status == 200 and any(item.get("id") == schedule_id for item in schedule_list.get("schedules", []))
+
+              status, _, patched = json_request("PATCH", f"/api/schedules/{schedule_id}", {"enabled": False}, cookie=cookie)
+              assert status == 200 and patched.get("enabled") is False
+
+              status, _, deleted = json_request("DELETE", f"/api/schedules/{schedule_id}", cookie=cookie)
+              assert status == 200 and deleted.get("deleted") is True
+
+              status, logout_headers, logout = json_request("POST", "/api/logout", cookie=cookie)
+              assert status == 200 and logout.get("authenticated") is False
+              assert "Max-Age=0" in logout_headers.get("Set-Cookie", "")
+              status, _, denied_after_logout = json_request("GET", "/api/health", cookie=cookie)
+              assert status == 401
+
+              status, relogin_headers, relogin = json_request("POST", "/api/login", {"username": "admin", "password": new_password})
+              assert status == 200 and relogin.get("must_change_password") is False
+              assert relogin_headers.get("Set-Cookie", "").startswith("mtscan_session=")
+
+              summary = {
+                  "static_dashboard": "PASS",
+                  "security_headers": "PASS",
+                  "authentication": "PASS",
+                  "forced_password_change": "PASS",
+                  "host_header_filter": "PASS",
+                  "static_path_traversal": "PASS",
+                  "content_type_validation": "PASS",
+                  "health": "PASS",
+                  "dry_run_scan": "PASS",
+                  "stubbed_chain_scan": "PASS",
+                  "overview": "PASS",
+                  "schedule_crud": "PASS",
+                  "logout_relogin": "PASS",
+              }
+              Path("webapp-runtime-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+              print(json.dumps(summary, indent=2))
+          finally:
+              if process.poll() is None:
+                  process.terminate()
+                  try:
+                      process.wait(timeout=5)
+                  except subprocess.TimeoutExpired:
+                      process.kill()
+                      process.wait(timeout=5)
+              log_handle.close()
+              print(log_path.read_text(encoding="utf-8", errors="replace"))
+          PY
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: mtscan-runtime-validation
+          path: |
+            cli-help.log
+            cli-dry-run.log
+            cli-run.log
+            runtime-cli-results/
+            webapp-runtime.log
+            webapp-runtime-summary.json
+          if-no-files-found: ignore
