@@ -6,7 +6,7 @@ MTScan testing is divided into explicit categories so a passing test is not over
 
 ### Unit tests
 
-Validate isolated functions and data transformations, such as target validation, redaction, parser behavior, and report normalization.
+Validate isolated functions and data transformations, such as target validation, redaction, parser behavior, report normalization, and scanner command construction.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -18,11 +18,11 @@ Validate multiple MTScan components together, such as CLI -> shared runner -> sc
 
 ### Regression tests
 
-Capture a previously observed defect so it does not silently return. Examples include URL target propagation, authentication defaults, output cleanup behavior, and scanner handoff.
+Capture a previously observed defect so it does not silently return. Examples include URL target propagation, authentication defaults, output cleanup behavior, scanner handoff, and upstream CLI flag compatibility.
 
 ### Security tests
 
-Validate security controls such as Bandit/CodeQL/Semgrep findings, dependency auditing, authentication behavior, Host-header restrictions, path traversal defenses, redaction, and validation bypasses.
+Validate security controls such as authentication behavior, Host-header restrictions, path traversal defenses, redaction, and validation bypasses.
 
 ### Local lab tests
 
@@ -49,23 +49,42 @@ Pass/fail:
 Known limitations:
 ```
 
+## Recorded compatibility validation — 2026-08-21
+
+### COMPAT-PD-001
+
+**Purpose:** Validate MTScan 1.0.1 command construction against current ProjectDiscovery HTTPX and Nuclei CLI semantics after the compatibility patch.
+
+**MTScan branch:** `develop`.
+
+**Compatibility checks:**
+
+- HTTPX `--method POST` produces upstream request-method selection with `-x POST` and does not use the unrelated `-method` display probe.
+- Nuclei `--exclude-tags` produces `-etags` rather than `-et`.
+- Nuclei `--max-redirects` produces `-mr` rather than `-maxr`.
+- Nuclei User-Agent overrides produce `-H "User-Agent: ..."` rather than `-user-agent`.
+- Nuclei CSV mode is rejected before execution because current upstream Nuclei does not provide CSV output.
+- Earlier target-validation, command-redaction, profile-filter, URL-to-Naabu, and raw-evidence behaviors remain covered by regression tests.
+
+**Expected result:** MTScan produces only supported current ProjectDiscovery flag forms for the affected options and fails closed for unsupported Nuclei CSV output.
+
+**Actual result:** PASS in a focused disposable local compatibility harness. Equivalent regression cases are retained in `tests/test_regressions.py`.
+
+**Known limitation:** The execution runner used for this validation did not contain downloadable/current ProjectDiscovery binaries and had no outbound network path. This record certifies MTScan's command construction against the documented upstream CLI contract; it does not replace a later real-binary compatibility run.
+
 ## Recorded integration/regression lab tests — 2026-08-20
 
 ### INT-CHAIN-001
 
 **Purpose:** Validate CLI/web orchestration, target propagation, report generation, authentication flow, and full Naabu -> HTTPX -> Nuclei control flow in an isolated runner.
 
-**Environment:** GitHub-hosted Ubuntu 24.04.4 LTS, Python 3.12.
-
-**MTScan base:** `develop` around commit `39ff92712877eb3b6d144e37e9a198a3a1d3f821`; temporary test-only PR was not merged.
+**Environment:** Ubuntu 24.04.4 LTS, Python 3.12.
 
 **Dependencies:** MTScan Python dependencies; scanner executable stubs that emulated ProjectDiscovery version probes, output, and `-o` file creation.
 
 **Target:** Loopback fixture / synthetic scanner output.
 
 **Network isolation:** No external vulnerability target was scanned.
-
-**Expected result:** CLI help/dry-run succeeds; interactive launcher starts; full chain propagates stage outputs; web app authenticates; password change is enforced; health and scan APIs work; report is generated.
 
 **Actual result:** PASS after correcting the test harness to emulate scanner output-file creation.
 
@@ -75,17 +94,13 @@ Known limitations:
 
 **Purpose:** Validate real ProjectDiscovery HTTPX execution through MTScan against a live local web server.
 
-**Environment:** GitHub-hosted Ubuntu 24.04.4 LTS, Python 3.12, Go 1.27.0.
-
-**MTScan base:** `develop` commit `39ff92712877eb3b6d144e37e9a198a3a1d3f821`; temporary test-only PR was not merged.
+**Environment:** Ubuntu 24.04.4 LTS, Python 3.12, Go 1.27.0.
 
 **Dependencies:** ProjectDiscovery HTTPX `v1.10.0` installed from upstream Go module.
 
 **Target:** `http://127.0.0.1:18080`, a Python `ThreadingHTTPServer` fixture.
 
 **Network isolation:** Target bound to loopback only.
-
-**Command:** MTScan `--httpx` with title/status/server collection and saved reporting.
 
 **Expected result:** HTTPX reaches the service, returns HTTP 200 context, and MTScan reports one HTTP service.
 
@@ -96,8 +111,6 @@ Known limitations:
 ### INT-CVE-001
 
 **Purpose:** Validate real Nuclei CVE metadata detection plus MTScan CVE/CWE parsing and report generation.
-
-**Environment:** Same isolated Ubuntu runner as INT-HTTPX-001.
 
 **Dependencies:** Nuclei `v3.11.1`, Nuclei templates `v10.4.7`, custom safe local test template.
 
@@ -111,10 +124,6 @@ Known limitations:
 
 **Known limitations:** The server was **not** running vulnerable Log4j and the template did not exploit Log4Shell. This proves the Nuclei -> MTScan CVE metadata/reporting pipeline, not real-world exploitability of CVE-2021-44228.
 
-## Security CI
-
-The repository code-scanning workflow includes CodeQL, Semgrep, Bandit, and Python dependency auditing. These complement runtime tests; they do not replace them.
-
 ## Release test evidence
 
-For release-critical integration tests, record the test ID, commit, environment, upstream scanner versions, sanitized logs, and result in the release notes or retained CI artifact. Do not keep sensitive customer evidence in public CI.
+For release-critical integration tests, record the test ID, commit, environment, upstream scanner versions, sanitized logs, and result. Do not keep sensitive customer evidence in public test records.
