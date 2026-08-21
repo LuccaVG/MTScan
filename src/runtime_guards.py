@@ -21,6 +21,10 @@ HOST_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_
 IPV4_LIKE_PATTERN = re.compile(r"^\d+(?:\.\d+){3}$")
 URL_USERINFO_PATTERN = re.compile(r"(?i)(https?://)[^/@\s]+@")
 
+# These combinations identify MTScan's built-in web profiles. Positive Nuclei
+# tag filtering at these defaults can silently exclude unrelated CVE/RCE/etc.
+# templates, so the profile tag filter is removed while explicit custom tag
+# choices continue to pass through normally.
 RESTRICTIVE_PROFILE_SIGNATURES = {
     ("exposure,misconfig", "critical,high,medium", 75, 10),
     ("exposure,misconfig,panel", "critical,high", 100, 8),
@@ -135,6 +139,7 @@ def validate_target(tool_runner: ModuleType, target: object) -> str:
 
 
 def naabu_target(target: Optional[str]) -> Optional[str]:
+    """Return a Naabu-compatible host/IP while leaving non-URL targets unchanged."""
     if not target or not target.startswith(("http://", "https://")):
         return target
 
@@ -162,6 +167,7 @@ def _profile_tags_are_restrictive(kwargs: dict) -> bool:
 
 
 def _bound_arguments(function, args, kwargs) -> dict:
+    """Return arguments by parameter name for wrappers supporting positional callers."""
     try:
         return dict(inspect.signature(function).bind_partial(*args, **kwargs).arguments)
     except (TypeError, ValueError):
@@ -169,6 +175,7 @@ def _bound_arguments(function, args, kwargs) -> dict:
 
 
 def _replace_paired_flag(command: list[str], old_flag: str, new_flag: str, value: object) -> None:
+    """Replace one builder-generated flag only when its expected value follows it."""
     if value in (None, ""):
         return
     expected = str(value)
@@ -187,6 +194,7 @@ def _option_enabled(value: object) -> bool:
 
 
 def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
+    """Apply stable target, compatibility, profile, redaction, and evidence policies once."""
     if getattr(tool_runner, "_runtime_guards_applied", False):
         return
 
@@ -217,11 +225,17 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
     def build_httpx_command(*args, **kwargs):
         bound = _bound_arguments(original_build_httpx_command, args, kwargs)
         command = original_build_httpx_command(*args, **kwargs)
+
+        # Current HTTPX uses -method as an output probe and -x to select the
+        # request method(s). MTScan's --method option is a request selector.
         _replace_paired_flag(command, "-method", "-x", bound.get("method"))
         return command
 
     @functools.wraps(original_build_nuclei_command)
     def build_nuclei_command(*args, **kwargs):
+        # Web profile defaults are detection presets, not an instruction to
+        # exclude whole classes of vulnerability templates. Preserve any
+        # non-profile/custom tag selection exactly as the caller supplied it.
         if not args and _profile_tags_are_restrictive(kwargs):
             kwargs = dict(kwargs)
             kwargs["tags"] = None
@@ -233,9 +247,14 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
             )
 
         command = original_build_nuclei_command(*args, **kwargs)
+
+        # ProjectDiscovery Nuclei current CLI compatibility:
+        # -et is exclude-templates; -etags is exclude-tags.
         _replace_paired_flag(command, "-et", "-etags", bound.get("exclude_tags"))
+        # Nuclei uses -mr for maximum HTTP redirects.
         _replace_paired_flag(command, "-maxr", "-mr", bound.get("max_redirects"))
 
+        # Nuclei accepts custom User-Agent values as a normal HTTP header.
         user_agent = bound.get("user_agent")
         if user_agent not in (None, ""):
             expected = str(user_agent)
@@ -251,6 +270,7 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
         return [_redact_url_userinfo(value) for value in original_redact_command(command)]
 
     def cleanup_intermediate_outputs(output_dir: Path) -> None:
+        """Delete only transient target handoff lists, not scanner evidence."""
         for path in (output_dir / "httpx_targets.txt", output_dir / "nuclei_targets.txt"):
             try:
                 path.unlink(missing_ok=True)
@@ -258,6 +278,7 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
                 continue
 
     def keep_output_file_references(_results) -> None:
+        """Retain ToolResult.output_file references after report generation."""
         return None
 
     tool_runner.validate_target = functools.partial(validate_target, tool_runner)
