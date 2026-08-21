@@ -6,6 +6,18 @@ The format follows **Keep a Changelog**, and version numbers follow **Semantic V
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-21
+
+### Changed
+
+- CLI public-connectivity validation is now target-aware for explicitly non-public scan targets.
+- Loopback, private/link-local IPs and CIDRs, IPv6 unique-local targets, and `localhost` no longer require `--skip-network-check` for ordinary scans.
+- Operations that explicitly require public connectivity, such as `--update-templates`, continue to run the connectivity check even when the scan target is private.
+
+### Tests
+
+- Added regression coverage for loopback, RFC1918, IPv6 unique-local, localhost, public-target classification, noninteractive private-target scans, and the template-update connectivity exception.
+
 ## [1.0.1] - 2026-08-21
 
 ### Changed
@@ -59,6 +71,7 @@ The format follows **Keep a Changelog**, and version numbers follow **Semantic V
 - Mandatory first-login password change is enforced before protected API use.
 - Host-header checks, defensive browser headers, request-size limits, static-path validation, and API redaction are enabled in the local web server.
 
-[Unreleased]: https://github.com/LuccaVG/MTScan/compare/v1.0.1...develop
+[Unreleased]: https://github.com/LuccaVG/MTScan/compare/v1.0.2...develop
+[1.0.2]: https://github.com/LuccaVG/MTScan/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/LuccaVG/MTScan/compare/v1.0.0-alpha...v1.0.1
 [1.0.0-alpha]: https://github.com/LuccaVG/MTScan/releases/tag/v1.0.0-alpha
