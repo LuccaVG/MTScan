@@ -1,13 +1,14 @@
 """Runtime hardening policies shared by MTScan entry points.
 
 These guards keep the public runner API stable while enforcing target validation,
-URL-to-Naabu normalization, safe profile behavior, defensive command redaction,
-and evidence retention.
+URL-to-Naabu normalization, current ProjectDiscovery CLI compatibility, safe
+profile behavior, defensive command redaction, and evidence retention.
 """
 
 from __future__ import annotations
 
 import functools
+import inspect
 import ipaddress
 import re
 import urllib.parse
@@ -165,14 +166,52 @@ def _profile_tags_are_restrictive(kwargs: dict) -> bool:
     return signature in RESTRICTIVE_PROFILE_SIGNATURES
 
 
+def _bound_arguments(function, args, kwargs) -> dict:
+    """Return arguments by parameter name for wrappers supporting positional callers."""
+    try:
+        return dict(inspect.signature(function).bind_partial(*args, **kwargs).arguments)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+
+
+def _replace_paired_flag(command: list[str], old_flag: str, new_flag: str, value: object) -> None:
+    """Replace one builder-generated flag only when its expected value follows it."""
+    if value in (None, ""):
+        return
+    expected = str(value)
+    for index in range(len(command) - 1):
+        if command[index] == old_flag and command[index + 1] == expected:
+            command[index] = new_flag
+            return
+
+
+def _option_enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
-    """Apply stable target, profile, redaction, and evidence policies once."""
+    """Apply stable target, compatibility, profile, redaction, and evidence policies once."""
     if getattr(tool_runner, "_runtime_guards_applied", False):
         return
 
+    original_validate_scan_options = tool_runner.validate_scan_options
     original_build_naabu_command = tool_runner.build_naabu_command
+    original_build_httpx_command = tool_runner.build_httpx_command
     original_build_nuclei_command = tool_runner.build_nuclei_command
     original_redact_command = tool_runner.redact_command
+
+    @functools.wraps(original_validate_scan_options)
+    def validate_scan_options(options):
+        if _option_enabled(options.get("nuclei_csv")):
+            raise _scan_error(
+                tool_runner,
+                "Current ProjectDiscovery Nuclei does not support CSV output; use JSONL output instead.",
+            )
+        return original_validate_scan_options(options)
 
     @functools.wraps(original_build_naabu_command)
     def build_naabu_command(*args, **kwargs):
@@ -182,6 +221,16 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
             kwargs["target"] = naabu_target(kwargs.get("target"))
         return original_build_naabu_command(*args, **kwargs)
 
+    @functools.wraps(original_build_httpx_command)
+    def build_httpx_command(*args, **kwargs):
+        bound = _bound_arguments(original_build_httpx_command, args, kwargs)
+        command = original_build_httpx_command(*args, **kwargs)
+
+        # Current HTTPX uses -method as an output probe and -x to select the
+        # request method(s). MTScan's --method option is a request selector.
+        _replace_paired_flag(command, "-method", "-x", bound.get("method"))
+        return command
+
     @functools.wraps(original_build_nuclei_command)
     def build_nuclei_command(*args, **kwargs):
         # Web profile defaults are detection presets, not an instruction to
@@ -190,7 +239,31 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
         if not args and _profile_tags_are_restrictive(kwargs):
             kwargs = dict(kwargs)
             kwargs["tags"] = None
-        return original_build_nuclei_command(*args, **kwargs)
+
+        bound = _bound_arguments(original_build_nuclei_command, args, kwargs)
+        if _option_enabled(bound.get("csv_output")):
+            raise ValueError(
+                "Current ProjectDiscovery Nuclei does not support CSV output; use JSONL output instead."
+            )
+
+        command = original_build_nuclei_command(*args, **kwargs)
+
+        # ProjectDiscovery Nuclei current CLI compatibility:
+        # -et is exclude-templates; -etags is exclude-tags.
+        _replace_paired_flag(command, "-et", "-etags", bound.get("exclude_tags"))
+        # Nuclei uses -mr for maximum HTTP redirects.
+        _replace_paired_flag(command, "-maxr", "-mr", bound.get("max_redirects"))
+
+        # Nuclei accepts custom User-Agent values as a normal HTTP header.
+        user_agent = bound.get("user_agent")
+        if user_agent not in (None, ""):
+            expected = str(user_agent)
+            for index in range(len(command) - 1):
+                if command[index] == "-user-agent" and command[index + 1] == expected:
+                    command[index] = "-H"
+                    command[index + 1] = f"User-Agent: {expected}"
+                    break
+        return command
 
     @functools.wraps(original_redact_command)
     def redact_command(command):
@@ -209,7 +282,9 @@ def apply_tool_runner_fixes(tool_runner: ModuleType) -> None:
         return None
 
     tool_runner.validate_target = functools.partial(validate_target, tool_runner)
+    tool_runner.validate_scan_options = validate_scan_options
     tool_runner.build_naabu_command = build_naabu_command
+    tool_runner.build_httpx_command = build_httpx_command
     tool_runner.build_nuclei_command = build_nuclei_command
     tool_runner.redact_command = redact_command
     tool_runner.cleanup_intermediate_outputs = cleanup_intermediate_outputs
