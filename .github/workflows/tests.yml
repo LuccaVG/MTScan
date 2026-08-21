@@ -1,0 +1,29 @@
+name: Unit Tests
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    name: Python unit and regression tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
