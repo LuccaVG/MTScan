@@ -5,6 +5,7 @@ from pathlib import Path
 from src.tool_runner import (
     ScanInputError,
     ToolResult,
+    build_httpx_command,
     build_naabu_command,
     build_nuclei_command,
     cleanup_intermediate_outputs,
@@ -87,6 +88,63 @@ class TargetValidationRegressionTests(unittest.TestCase):
         )
         self.assertNotIn("admin:secret", preview)
         self.assertIn("[redacted]@example.com", preview)
+
+
+class ProjectDiscoveryCompatibilityRegressionTests(unittest.TestCase):
+    def test_httpx_method_uses_request_method_flag(self):
+        command = build_httpx_command(
+            target="https://example.com",
+            method="POST",
+            tool_path="httpx",
+        )
+        self.assertIn("-x", command)
+        self.assertEqual(command[command.index("-x") + 1], "POST")
+        self.assertNotIn("-method", command)
+
+    def test_nuclei_exclude_tags_uses_etags(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            exclude_tags="dos,fuzz",
+            tool_path="nuclei",
+        )
+        self.assertIn("-etags", command)
+        self.assertEqual(command[command.index("-etags") + 1], "dos,fuzz")
+        self.assertNotIn("-et", command)
+
+    def test_nuclei_max_redirects_uses_mr(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            max_redirects=5,
+            tool_path="nuclei",
+        )
+        self.assertIn("-mr", command)
+        self.assertEqual(command[command.index("-mr") + 1], "5")
+        self.assertNotIn("-maxr", command)
+
+    def test_nuclei_user_agent_is_sent_as_header(self):
+        command = build_nuclei_command(
+            target="https://example.com",
+            user_agent="MTScan/1.0.1",
+            tool_path="nuclei",
+        )
+        self.assertIn("-H", command)
+        self.assertEqual(command[command.index("-H") + 1], "User-Agent: MTScan/1.0.1")
+        self.assertNotIn("-user-agent", command)
+
+    def test_nuclei_csv_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not support CSV output"):
+            build_nuclei_command(
+                target="https://example.com",
+                csv_output=True,
+                tool_path="nuclei",
+            )
+
+    def test_nuclei_csv_scan_option_is_rejected(self):
+        with self.assertRaisesRegex(ScanInputError, "does not support CSV output"):
+            validate_scan_request(
+                "https://example.com",
+                {"nuclei_csv": True},
+            )
 
 
 class NucleiProfileRegressionTests(unittest.TestCase):
