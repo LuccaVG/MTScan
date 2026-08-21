@@ -95,13 +95,13 @@ Compatibility-only accepted flags: `--source-port`, `--interface`, `--host-disco
 | `--markdown-export` | path | Nuclei Markdown export directory | none |
 | `--sarif-export` | path | Nuclei SARIF export file | none |
 
-`--nuclei-csv` may still be accepted by older parser surfaces, but MTScan 1.0.1 rejects it before execution because current ProjectDiscovery Nuclei does not support CSV output. Use `--nuclei-json` or `--json-output` for structured Nuclei results.
+`--nuclei-csv` may still be accepted by older parser surfaces, but MTScan rejects it before execution because current ProjectDiscovery Nuclei does not support CSV output. Use `--nuclei-json` or `--json-output` for structured Nuclei results.
 
 Compatibility-only accepted flags: `--exclude-severity` and `--include-rr`.
 
 ## ProjectDiscovery compatibility notes
 
-MTScan 1.0.1 aligns command construction with the current ProjectDiscovery CLI semantics used by the project:
+MTScan aligns command construction with the current ProjectDiscovery CLI semantics used by the project:
 
 - HTTPX request methods use `-x`; upstream `-method` is an output/display probe and is not used for MTScan's `--method` selector.
 - Nuclei exclude-tag filtering uses `-etags`; upstream `-et` is reserved for excluded templates.
@@ -123,10 +123,12 @@ These mappings are covered by regression tests because ProjectDiscovery CLI beha
 | `--update-templates` | boolean | Update Nuclei templates before scanning | off |
 | `--timeout` | integer | Per-tool/process runtime cap where applicable | none |
 | `--force-tools` | boolean | Continue when preflight tool checks fail | off |
-| `--skip-network-check` | boolean | Skip Internet/network preflight | off |
+| `--skip-network-check` | boolean | Explicitly skip public-connectivity preflight | off |
 | `--dry-run` | boolean | Validate and print commands without scanner execution | off |
 | `--check-tools` | boolean | Check Naabu/HTTPX/Nuclei availability and exit | off |
 | `--no-color` | boolean | Disable scanner color output | off at CLI level; MTScan command builders generally request no color |
+
+MTScan 1.0.2 automatically skips the public-connectivity preflight for ordinary scans of explicitly non-public targets. Public targets still use the preflight, and operations such as `--update-templates` still require it even when the scan target is private. See [CLI connectivity checks](cli-network-checks.md).
 
 `--verbose` is accepted for compatibility and is not currently a stable behavior switch.
 
