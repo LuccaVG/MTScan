@@ -37,6 +37,8 @@ MTScan documentation follows the **Diátaxis** framework. Choose a section based
 
 - [Development architecture](development/architecture.md)
 - [Testing](development/testing.md)
+- [Continuous integration](development/ci.md)
+- [Runtime validation](development/runtime-validation.md)
 - [Release process](development/release-process.md)
 - [Coding and documentation standards](development/coding-standards.md)
 
@@ -49,4 +51,4 @@ MTScan documentation follows the **Diátaxis** framework. Choose a section based
 
 ## Versioning
 
-The current alpha is **1.0.0 Alpha**, represented canonically as `1.0.0-alpha`. Release history is maintained in the root [CHANGELOG.md](../CHANGELOG.md).
+The current release is **1.0.2**. The root [`VERSION`](../VERSION) file is the canonical version source, and release history is maintained in the root [CHANGELOG.md](../CHANGELOG.md).
