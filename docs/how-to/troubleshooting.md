@@ -22,13 +22,21 @@ Some Linux distributions package an unrelated program named `httpx`. MTScan prob
 
 ## Network connectivity check fails
 
-Use `--skip-network-check` only when you understand why the check is failing, such as an isolated lab with no Internet route:
+MTScan 1.0.2 automatically skips the public Internet connectivity preflight for ordinary scans when the validated target is explicitly non-public, including loopback, private/link-local IPs and CIDRs, IPv6 unique-local targets, and `localhost`.
+
+For example, this isolated-lab scan no longer needs `--skip-network-check`:
 
 ```bash
-python src/workflow.py --httpx -host http://127.0.0.1:18080 --skip-network-check
+python src/workflow.py --httpx -host http://127.0.0.1:18080
 ```
 
-The flag skips MTScan's preflight check; it does not make an unreachable scanner target reachable.
+For public targets, the connectivity preflight still runs. `--skip-network-check` remains available as an explicit override when you understand why the preflight is failing:
+
+```bash
+python src/workflow.py --httpx -host https://target.example --skip-network-check
+```
+
+Operations that explicitly require public connectivity, such as `--update-templates`, continue to run the connectivity check even when the scan target is private. Skipping the preflight never makes an unreachable scanner target reachable.
 
 ## Web app will not bind remotely
 

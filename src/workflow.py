@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import ipaddress
 import os
 import signal
 import subprocess
@@ -18,6 +19,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -192,9 +194,45 @@ def check_platform(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def target_is_non_public(target: str) -> bool:
+    """Return True for targets that do not require public Internet reachability."""
+    candidate = target.strip()
+    if "://" in candidate:
+        host = urlsplit(candidate).hostname
+        if not host:
+            return False
+        candidate = host
+    elif "/" in candidate:
+        try:
+            return not ipaddress.ip_network(candidate, strict=False).is_global
+        except ValueError:
+            return False
+    elif candidate.startswith("[") and "]" in candidate:
+        candidate = candidate[1:candidate.index("]")]
+    elif candidate.count(":") == 1:
+        host, port = candidate.rsplit(":", 1)
+        if port.isdigit():
+            candidate = host
+
+    normalized = candidate.rstrip(".").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+
+    try:
+        return not ipaddress.ip_address(candidate).is_global
+    except ValueError:
+        return False
+
+
 def check_network(args: argparse.Namespace) -> None:
     if args.dry_run or args.skip_network_check:
         return
+
+    target = args.host or args.target
+    if target and target_is_non_public(target) and not args.update_templates:
+        print("Skipping public network connectivity check for local/private target.")
+        return
+
     print("Checking network connectivity...")
     if tool_runner.check_network_connectivity():
         print("Network connectivity: OK")

@@ -37,9 +37,10 @@ python src/workflow.py \
   --title \
   --status-code \
   --web-server \
-  --skip-network-check \
   --save-output
 ```
+
+MTScan 1.0.2 recognizes loopback and other explicitly non-public targets and does not require a public Internet connectivity preflight for ordinary scans. `--skip-network-check` remains available as a manual override for other environments. Operations that explicitly need public connectivity, such as `--update-templates`, still perform the connectivity check.
 
 MTScan should report the local service as reachable and generate `vulnerability_report.md` in a timestamped result directory.
 
