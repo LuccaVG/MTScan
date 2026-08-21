@@ -8,26 +8,22 @@ MTScan uses Semantic Versioning:
 MAJOR.MINOR.PATCH
 ```
 
-After stable `1.0.0`:
+For stable releases:
 
 - **MAJOR** — incompatible CLI/API/storage behavior or other breaking public-interface change.
 - **MINOR** — backward-compatible feature.
 - **PATCH** — backward-compatible bug or security fix.
 
-Pre-release identifiers follow SemVer. The current human-facing **1.0.0 Alpha** is represented as:
+Pre-release identifiers follow SemVer when used, for example:
 
 ```text
-1.0.0-alpha
+1.1.0-alpha.1
+1.1.0-beta.1
+1.1.0-rc.1
+1.1.0
 ```
 
-Future pre-release examples:
-
-```text
-1.0.0-alpha.2
-1.0.0-beta.1
-1.0.0-rc.1
-1.0.0
-```
+The current release is `1.0.2`.
 
 ## Source of version truth
 
@@ -52,18 +48,20 @@ Keep an `Unreleased` section for changes on `develop`.
 2. Update `VERSION`.
 3. Move relevant `Unreleased` entries into a dated version section.
 4. Verify README and documentation links/version references.
-5. Run unit/regression tests.
-6. Run required integration and real-tool compatibility tests.
-7. Run security scanning and dependency audit.
-8. Verify installation on the supported release environments selected for that release.
-9. Prepare a release PR from `develop` to the release branch (normally `main`).
-10. Tag the merged release commit as `v<version>`.
-11. Publish release notes from the changelog and test evidence.
-12. Re-open an empty `Unreleased` section on `develop` if needed.
+5. Run the complete unit/regression suite.
+6. Run runtime validation for CLI and webapp behavior.
+7. Run required real-tool compatibility and isolated integration tests for the release scope.
+8. Run security scanning and dependency audit.
+9. Verify installation on the supported release environments selected for that release.
+10. Prepare a release PR from `develop` to the release branch (normally `main`).
+11. Merge only after all required release gates pass.
+12. Tag the merged release commit as `v<version>`.
+13. Publish release notes from the changelog and retained test evidence.
+14. Synchronize `develop` with the merged `main` state so the next development cycle starts from the released history.
 
-## Breaking changes during alpha
+## Pre-release changes
 
-The `1.0.0-alpha` line can still change unstable interfaces, but breaking changes must still be documented in `CHANGELOG.md` and, when architectural, in an ADR. Alpha status is not permission for undocumented behavior changes.
+When a future alpha, beta, or release-candidate line is used, unstable interfaces may still change, but breaking changes must be documented in `CHANGELOG.md` and, when architectural, in an ADR. Pre-release status is not permission for undocumented behavior changes.
 
 ## Security releases
 
