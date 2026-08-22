@@ -6,7 +6,7 @@ MTScan is a security testing tool and must be used only on systems you own or ar
 
 | Version | Supported |
 |---|---|
-| `1.0.0-alpha` / current `develop` alpha line | Yes |
+| `1.0.2-alpha` / current `develop` alpha line | Yes |
 | Older development snapshots | No guaranteed security support |
 
 During the alpha period, security fixes are applied to the current development line. Backports are not guaranteed.
