@@ -49,7 +49,7 @@ jobs:
           upload: never
 
       - name: Upload CodeQL SARIF artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: always() && hashFiles('codeql-results/**/*.sarif') != ''
         with:
           name: codeql-${{ matrix.language }}-sarif
@@ -103,7 +103,7 @@ jobs:
           exit 1
 
       - name: Upload Semgrep SARIF artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: always() && hashFiles('semgrep.sarif') != ''
         with:
           name: semgrep-sarif
@@ -151,7 +151,7 @@ jobs:
         run: python -m json.tool bandit.json
 
       - name: Upload Python security reports
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: python-security-reports
